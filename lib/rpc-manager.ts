@@ -2,8 +2,9 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, SettingsManager, Theme, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
-import { existsSync, realpathSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "fs";
 import { resolve } from "path";
+import { fileIsUnder, resolveWebSessionDir, resolveWebSessionDirAsync } from "./web-admin-scope";
 import { validateAgentImages } from "./image-attachments";
 import { invalidateModelsCache } from "./models-cache";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
@@ -13,6 +14,8 @@ import {
   createProjectCommandBashOperations,
   preferUserBashExtension,
 } from "./project-command-env";
+import { createProductWriteGuardExtension } from "./web-write-guard";
+import { createPoolWalkGuardExtension } from "./web-bash-guard";
 import { cacheSessionPath, getLatestModelChange, invalidateSessionListCache, readLatestSessionEntryId, resolveSessionPath } from "./session-reader";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { notifySessionComplete } from "./web-push";
@@ -2055,8 +2058,18 @@ function trackStartingSession(cwd: string): () => void {
   };
 }
 
+function rpcVisibleInScope(session: { sessionFile?: string; inner?: { sessionManager?: { getSessionFile?: () => string | undefined } } }): boolean {
+  const dir = resolveWebSessionDir();
+  if (!dir) return true;
+  const file = session.inner?.sessionManager?.getSessionFile?.() || session.sessionFile || "";
+  if (!file) return true;
+  return fileIsUnder(file, dir);
+}
+
 export function getRpcSession(sessionId: string): AgentSessionWrapper | undefined {
-  return getRegistry().get(sessionId);
+  const session = getRegistry().get(sessionId);
+  if (!session || !rpcVisibleInScope(session)) return undefined;
+  return session;
 }
 
 export interface SetRpcSessionToolsResult {
@@ -2091,7 +2104,7 @@ export async function setRpcSessionTools(
       await pending.catch(() => undefined);
       return setRpcSessionTools(sessionId, sessionFile, requestedToolNames);
     }
-    const manager = SessionManager.open(sessionFile, undefined);
+    const manager = SessionManager.open(sessionFile, resolveWebSessionDir() ?? undefined);
     if (readSubagentSessionResources(manager.getEntries() as unknown as SessionEntry[])) {
       throw new Error("Subagent tool selection is fixed by its profile");
     }
@@ -2171,6 +2184,7 @@ export function getRpcSessionInfos(options: { includeTransient?: boolean } = {})
   const sessions: SessionInfo[] = [];
   for (const session of getRegistry().values()) {
     if (typeof session.isAlive !== "function" || !session.isAlive()) continue;
+    if (!rpcVisibleInScope(session)) continue;
 
     const manager = session.inner?.sessionManager;
     if (!manager) continue;
@@ -2243,7 +2257,7 @@ export async function destroyRpcSessionsForCwd(cwd: string): Promise<number> {
 export function getRunningRpcSessionIds(): string[] {
   const ids = new Set<string>();
   for (const [sessionId, session] of getRegistry()) {
-    if (session.isRunning()) ids.add(session.sessionId || sessionId);
+    if (session.isRunning() && rpcVisibleInScope(session)) ids.add(session.sessionId || sessionId);
   }
   return [...ids];
 }
@@ -2251,7 +2265,7 @@ export function getRunningRpcSessionIds(): string[] {
 export function getCompletionNotificationSuppressedRpcSessionIds(): string[] {
   const ids = new Set<string>();
   for (const [sessionId, session] of getRegistry()) {
-    if (session.isRunning() && session.hasSuppressedCompletionNotifications()) {
+    if (session.isRunning() && rpcVisibleInScope(session) && session.hasSuppressedCompletionNotifications()) {
       ids.add(session.sessionId || sessionId);
     }
   }
@@ -2295,12 +2309,20 @@ export async function startRpcSession(
     return waiting;
   }
 
+  const sessionDir = await resolveWebSessionDirAsync();
+  if (sessionDir) {
+    try {
+      mkdirSync(sessionDir, { recursive: true });
+    } catch {
+      /* SessionManager.create still tries */
+    }
+  }
   let sessionManager: SessionManager;
   if (sessionFile) {
-    sessionManager = SessionManager.open(sessionFile, undefined);
+    sessionManager = SessionManager.open(sessionFile, sessionDir ?? undefined);
   } else {
     if (!cwd) throw new Error("cwd is required for a new session");
-    sessionManager = SessionManager.create(cwd, undefined);
+    sessionManager = SessionManager.create(cwd, sessionDir ?? undefined);
   }
   const sessionCwd = sessionManager.getCwd();
   const subagentResources = sessionFile
@@ -2397,6 +2419,8 @@ export async function startRpcSession(
                 cwd: sessionCwd,
                 settings: settingsManager,
               }),
+              createProductWriteGuardExtension(),
+              createPoolWalkGuardExtension(sessionCwd),
               createSubagentExtension(
                 SUBAGENT_CONTROLLER.extensionRuntime,
                 () => listSubagentProfiles(sessionCwd),

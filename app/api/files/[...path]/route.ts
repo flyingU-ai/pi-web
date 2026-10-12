@@ -19,7 +19,8 @@ import {
   getVideoMime,
 } from "@/lib/file-types";
 import { resolveDirentIsDirectory } from "@/lib/file-dirent";
-import { getFileTreeVisibility } from "@/lib/file-tree-visibility";
+import { getFileTreeVisibility, isHiddenOutsideGit } from "@/lib/file-tree-visibility";
+import { isPoolHeavyDir } from "@/lib/web-bash-guard";
 import { isFilePathReferencedBySession } from "@/lib/session-file-references";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import {
@@ -660,8 +661,15 @@ export async function GET(
 
     // Avoid per-entry stat calls for normal files and directories. Symlinks and
     // filesystems without directory type information use the stat fallback.
-    const dirents = fs.readdirSync(filePath, { withFileTypes: true });
-    const isVisible = await getFileTreeVisibility(filePath, dirents.map((d) => d.name));
+    let dirents = fs.readdirSync(filePath, { withFileTypes: true });
+    if (isPoolHeavyDir(filePath) && dirents.length > 80) {
+      const keep = dirents.filter((d) => d.name.startsWith("pool_distribution"));
+      const rest = dirents.filter((d) => !d.name.startsWith("pool_distribution")).slice(0, 80);
+      dirents = [...keep, ...rest];
+    }
+    const isVisible = isPoolHeavyDir(filePath)
+      ? (name: string) => !isHiddenOutsideGit(name)
+      : await getFileTreeVisibility(filePath, dirents.map((d) => d.name));
     const entries = dirents
       .filter((d) => isVisible(d.name))
       .flatMap((d) => {

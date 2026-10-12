@@ -7,6 +7,15 @@ import {
   type LoadExtensionsResult,
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
+import {
+  BASH_IDLE_SECONDS,
+  BASH_START_GRACE_SECONDS,
+  BASH_WALL_FALLBACK_SECONDS,
+  bashDeniedResult,
+  denyBashCommand,
+  isWalkLikeCommand,
+  resolveBashTimeout,
+} from "./web-bash-guard";
 
 const HOST_EXTENSION_NAME = "pi-web-project-command-environment";
 const HOST_EXTENSION_PATH = `<inline:${HOST_EXTENSION_NAME}>`;
@@ -23,6 +32,8 @@ type ProjectCommandBashOperationsOptions = {
   abortSettleGraceMs?: number;
   agentBinDir?: string;
   baseEnvironment?: NodeJS.ProcessEnv;
+  idleSeconds?: number;
+  startGraceSeconds?: number;
   localOperations?: BashOperations;
   platform?: NodeJS.Platform;
   shellPath?: string;
@@ -75,6 +86,8 @@ export function createProjectCommandBashOperations(
     abortSettleGraceMs = ABORT_SETTLE_GRACE_MS,
     agentBinDir = join(getAgentDir(), "bin"),
     baseEnvironment = process.env,
+    idleSeconds = BASH_IDLE_SECONDS,
+    startGraceSeconds = BASH_START_GRACE_SECONDS,
     localOperations = createLocalBashOperations({ shellPath: options.shellPath }),
     platform = process.platform,
   } = options;
@@ -87,21 +100,53 @@ export function createProjectCommandBashOperations(
         platform,
       );
       const { onData, signal, timeout } = executionOptions;
+      const walkLike = isWalkLikeCommand(command);
       let released = false;
+      let settled = false;
+      let settle: ((error?: Error, result?: BashExecResult) => void) | undefined;
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const timers: ReturnType<typeof setTimeout>[] = [];
+      const release = () => {
+        released = true;
+        if (idleTimer) clearTimeout(idleTimer);
+        for (const timer of timers) clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      const armIdle = (seconds: number) => {
+        if (idleTimer) clearTimeout(idleTimer);
+        if (!(seconds > 0)) return;
+        idleTimer = setTimeout(() => {
+          const err = new Error(`idle:${seconds}`);
+          release();
+          settle?.(err);
+        }, Math.min(seconds * 1000, MAX_TIMER_DELAY_MS));
+      };
+      const onAbort = () => {
+        timers.push(setTimeout(() => {
+          const err = new Error("aborted");
+          release();
+          settle?.(err);
+        }, abortSettleGraceMs));
+      };
+
       const execution = localOperations.exec(command, cwd, {
         ...executionOptions,
         env: environment,
         // Callers finalize their output once the command is released; a
         // survivor must not append to it afterwards.
         onData: (data) => {
-          if (!released) onData(data);
+          if (released) return;
+          // Streaming find/fd/rglob is not progress; do not reset the idle fuse.
+          if (!walkLike) armIdle(idleSeconds);
+          onData(data);
         },
       });
       // Pi rejects any other timeout before it starts the command.
       const timeoutMs = typeof timeout === "number" && Number.isFinite(timeout) && timeout > 0
         ? timeout * 1000
         : undefined;
-      if (!signal && timeoutMs === undefined) return execution;
+      const needWrap = Boolean(signal) || timeoutMs !== undefined || idleSeconds > 0 || startGraceSeconds > 0;
+      if (!needWrap) return execution;
 
       // On Stop or a timeout, pi kills the shell's process tree but then keeps
       // reading until every inherited stdout/stderr handle falls idle. A
@@ -111,28 +156,26 @@ export function createProjectCommandBashOperations(
       // own (#647). The errors are pi's own, so the bash tool reports them as
       // "Command aborted" and "Command timed out".
       return new Promise<BashExecResult>((resolve, reject) => {
-        const timers: ReturnType<typeof setTimeout>[] = [];
-        const release = () => {
-          released = true;
-          for (const timer of timers) clearTimeout(timer);
-          signal?.removeEventListener("abort", onAbort);
+        settle = (error, result) => {
+          if (settled) return;
+          settled = true;
+          if (error) reject(error);
+          else resolve(result as BashExecResult);
         };
-        const releaseAfter = (delayMs: number, error: Error) => {
-          timers.push(setTimeout(() => {
-            release();
-            reject(error);
-          }, Math.min(delayMs, MAX_TIMER_DELAY_MS)));
-        };
-        const onAbort = () => releaseAfter(abortSettleGraceMs, new Error("aborted"));
         if (timeoutMs !== undefined) {
-          releaseAfter(timeoutMs + abortSettleGraceMs, new Error(`timeout:${timeout}`));
+          timers.push(setTimeout(() => {
+            const err = new Error(`timeout:${timeout}`);
+            release();
+            settle?.(err);
+          }, Math.min(timeoutMs + abortSettleGraceMs, MAX_TIMER_DELAY_MS)));
         }
+        armIdle(startGraceSeconds);
         execution.then((result) => {
           release();
-          resolve(result);
+          settle?.(undefined, result);
         }, (error: unknown) => {
           release();
-          reject(error);
+          settle?.(error instanceof Error ? error : new Error(String(error)));
         });
         if (signal?.aborted) onAbort();
         else signal?.addEventListener("abort", onAbort, { once: true });
@@ -152,14 +195,25 @@ export function createProjectCommandBashExtension(options: {
       const displayDefinition = createBashToolDefinition(options.cwd);
       pi.registerTool({
         ...displayDefinition,
-        execute(toolCallId, params, signal, onUpdate, context) {
+        async execute(toolCallId, params, signal, onUpdate, context) {
+          const command = String((params as { command?: string })?.command || "");
+          const denied = denyBashCommand(command, options.cwd);
+          if (denied) return bashDeniedResult(denied);
           const executionDefinition = createBashToolDefinition(options.cwd, {
             commandPrefix: options.settings.getShellCommandPrefix(),
             operations: createProjectCommandBashOperations({
               shellPath: options.settings.getShellPath(),
             }),
           });
-          return executionDefinition.execute(toolCallId, params, signal, onUpdate, context);
+          const asked = resolveBashTimeout((params as { timeout?: unknown })?.timeout);
+          const timeout = asked ?? BASH_WALL_FALLBACK_SECONDS;
+          return executionDefinition.execute(
+            toolCallId,
+            { ...(params as object), command, timeout } as { command: string; timeout?: number },
+            signal,
+            onUpdate,
+            context,
+          );
         },
       });
     },

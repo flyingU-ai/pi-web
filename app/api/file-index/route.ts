@@ -11,6 +11,7 @@ import {
 } from "@/lib/file-access";
 import { buildEntriesFromFiles, filterFileEntries, type FileIndexEntry } from "@/lib/file-fuzzy";
 import { isHiddenOutsideGit } from "@/lib/file-tree-visibility";
+import { isDatePoolRoot, isPoolHeavyDir } from "@/lib/web-bash-guard";
 
 const execFileAsync = promisify(execFile);
 
@@ -66,6 +67,22 @@ async function listWithGit(cwd: string): Promise<FileListing | null> {
     // Not a git repo (or git unavailable) — caller falls back to readdir walk.
     return null;
   }
+}
+
+/** DatePool root only: top-level names. Trailing slash marks a warehouse dir for @. */
+function listDatePoolTop(cwd: string): FileListing {
+  const files: string[] = [];
+  try {
+    const dirents = fs.readdirSync(cwd, { withFileTypes: true });
+    for (const d of dirents) {
+      if (isHiddenOutsideGit(d.name)) continue;
+      if (d.isDirectory()) files.push(`${d.name}/`);
+      else if (d.isFile()) files.push(d.name);
+    }
+  } catch {
+    return { files: [], hardTruncated: true };
+  }
+  return { files, hardTruncated: false };
 }
 
 function listWithWalk(cwd: string): FileListing {
@@ -137,7 +154,9 @@ export async function GET(req: NextRequest) {
     const now = Date.now();
     let cached = cache.get(cwd);
     if (!cached || cached.expiresAt <= now) {
-      const listing = (await listWithGit(cwd)) ?? listWithWalk(cwd);
+      const listing = isDatePoolRoot(cwd) || isPoolHeavyDir(cwd)
+        ? listDatePoolTop(cwd)
+        : (await listWithGit(cwd)) ?? listWithWalk(cwd);
       for (const [key, entry] of cache) {
         if (entry.expiresAt <= now) cache.delete(key);
       }
