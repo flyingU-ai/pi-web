@@ -193,3 +193,53 @@ test("a cwd that climbs out through a link is refused by the other routes too", 
   ));
   assert.equal(response.status, 403);
 });
+
+test("DatePool root @-index lists warehouses only, not nested Sample Units", async () => {
+  const pool = path.join(base, "AgentSMarkDatePoolv2");
+  fs.mkdirSync(path.join(pool, "smt_benchmark", "boardA"), { recursive: true });
+  fs.writeFileSync(path.join(pool, "smt_benchmark", "boardA", "boardA.png"), "png");
+  fs.writeFileSync(path.join(pool, "README.md"), "pool");
+  allowFileRoot(pool);
+
+  const response = await getFileIndex(new NextRequest(
+    `http://localhost/api/file-index?cwd=${encodeURIComponent(pool)}`,
+    { headers: { host: "localhost" } },
+  ));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.ok(body.files.includes("smt_benchmark/"));
+  assert.ok(body.files.includes("README.md"));
+  assert.ok(!body.files.some((name) => String(name).includes("boardA")));
+});
+
+test("DatePool @-index also lists code/ from the admin repo", async () => {
+  const pool = path.join(base, "AgentSMarkDatePoolv2-code");
+  const code = path.join(base, "promptDet-at");
+  fs.mkdirSync(path.join(pool, "smt_benchmark"), { recursive: true });
+  fs.mkdirSync(code, { recursive: true });
+  fs.writeFileSync(path.join(code, "README.md"), "repo");
+  const prevRoot = process.env.ANNOTATION_WORKSPACE_ROOT;
+  const prevMap = process.env.PI_WEB_ADMIN_WORKSPACES;
+  process.env.ANNOTATION_WORKSPACE_ROOT = pool;
+  process.env.PI_WEB_ADMIN_WORKSPACES = JSON.stringify({ flyingu: code });
+  allowFileRoot(pool);
+  allowFileRoot(code);
+  try {
+    const response = await getFileIndex(new NextRequest(
+      `http://localhost/api/file-index?cwd=${encodeURIComponent(pool)}`,
+      { headers: { host: "localhost", cookie: "aoi_admin=flyingu" } },
+    ));
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.ok(body.files.includes("smt_benchmark/"));
+    assert.ok(body.files.includes("code/"));
+    assert.ok(body.files.includes("code/home/"));
+    assert.ok(body.files.includes("code/promptDet-at/"));
+    assert.ok(body.files.includes("code/promptDet-at/README.md"));
+  } finally {
+    if (prevRoot === undefined) delete process.env.ANNOTATION_WORKSPACE_ROOT;
+    else process.env.ANNOTATION_WORKSPACE_ROOT = prevRoot;
+    if (prevMap === undefined) delete process.env.PI_WEB_ADMIN_WORKSPACES;
+    else process.env.PI_WEB_ADMIN_WORKSPACES = prevMap;
+  }
+});

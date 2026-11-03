@@ -10,6 +10,7 @@ import {
   getRelativeFilePath,
   joinFilePath,
   normalizeFilePathSlashes,
+  uploadDirFromSelection,
 } from "@/lib/file-paths";
 import type { GitFileStatus, GitFileStatusKind, GitStatusResponse } from "@/lib/git-types";
 import type { FileIndexEntry } from "@/lib/file-fuzzy";
@@ -51,21 +52,11 @@ interface Props {
   onChangesCountChange?: (count: number) => void;
   fileSearchOpen?: boolean;
   onFileSearchOpenChange?: (open: boolean) => void;
+  onUploadDirChange?: (dir: string) => void;
 }
 
 export interface FileExplorerHandle {
   openUploadPicker: () => void;
-}
-
-/** Upload into the deepest open code/ folder; otherwise the DatePool cwd. */
-export function uploadDirFromExpanded(cwd: string, expanded: Iterable<string>): string {
-  const root = normalizeFilePathSlashes(cwd).replace(/\/+$/, "");
-  const codeRoot = `${root}/code`;
-  const hits = [...expanded]
-    .map((p) => normalizeFilePathSlashes(p))
-    .filter((p) => p === codeRoot || p.startsWith(`${codeRoot}/`))
-    .sort((a, b) => b.length - a.length);
-  return hits[0] || cwd;
 }
 
 type UploadPhase = "idle" | "checking" | "uploading";
@@ -112,6 +103,16 @@ async function fetchEntries(dirPath: string): Promise<FileNode[]> {
 
 // Sends the target the operator was shown, so a link pointed elsewhere since
 // the listing is refused instead of granting a directory nobody looked at.
+async function mutateCodePath(target: string, body: Record<string, string>): Promise<void> {
+  const res = await fetch(`/api/files/${encodeFilePathForApi(target)}?type=mutate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({})) as { error?: string };
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+}
+
 async function allowOutsideLink(linkPath: string, target: string): Promise<void> {
   const res = await fetch(`/api/files/${encodeFilePathForApi(linkPath)}?type=allow-link`, {
     method: "POST",
@@ -200,6 +201,10 @@ export function TreeNode({
   highlightedPaths,
   gitStatusByPath,
   changedDirectoryPaths,
+  selectedDir,
+  onSelectDir,
+  inCodeZone = false,
+  onCodeMenu,
   t,
 }: {
   node: FileNode;
@@ -213,6 +218,10 @@ export function TreeNode({
   highlightedPaths: Set<string>;
   gitStatusByPath: Map<string, GitFileStatus>;
   changedDirectoryPaths: Set<string>;
+  selectedDir: string;
+  onSelectDir: (dir: string) => void;
+  inCodeZone?: boolean;
+  onCodeMenu?: (node: FileNode, event: React.MouseEvent) => void;
   t: Translate;
 }) {
   const open = expandedPaths.has(node.fullPath);
@@ -266,15 +275,19 @@ export function TreeNode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken]);
 
+  const selected = selectedDir === node.fullPath;
+
   const handleClick = useCallback(() => {
     if (node.isDir) {
+      onSelectDir(node.fullPath);
       const next = !open;
       onToggleExpanded(node.fullPath, next);
       if (next && !loaded && !pendingLinkTarget) loadChildren();
     } else {
+      onSelectDir(getFileDirectory(node.fullPath) || cwd);
       onOpenFile(node.fullPath, node.name);
     }
-  }, [node.isDir, node.fullPath, node.name, loaded, open, pendingLinkTarget, loadChildren, onOpenFile, onToggleExpanded]);
+  }, [cwd, node.isDir, node.fullPath, node.name, loaded, open, pendingLinkTarget, loadChildren, onOpenFile, onSelectDir, onToggleExpanded]);
 
   const handleAllowLink = useCallback(async (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -301,6 +314,11 @@ export function TreeNode({
     <div>
       <div
         onClick={handleClick}
+        onContextMenu={(event) => {
+          if (!onCodeMenu) return;
+          event.preventDefault();
+          onCodeMenu(node, event);
+        }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{
@@ -312,7 +330,9 @@ export function TreeNode({
           paddingRight: 8,
           height: 24,
           cursor: "pointer",
-          background: hovered ? "var(--bg-hover)" : "transparent",
+          background: selected
+            ? (inCodeZone ? "color-mix(in srgb, #3b82f6 18%, transparent)" : "var(--bg-selected)")
+            : hovered ? "var(--bg-hover)" : "transparent",
           borderRadius: 4,
           userSelect: "none",
         }}
@@ -394,7 +414,7 @@ export function TreeNode({
             title={t("files.insertPath")}
             style={{
               position: "absolute",
-              right: !node.isDir ? 28 : 4,
+              right: onCodeMenu ? (!node.isDir ? 50 : 26) : (!node.isDir ? 28 : 4),
               top: "50%",
               transform: "translateY(-50%)",
               display: "flex",
@@ -415,6 +435,34 @@ export function TreeNode({
           >
             <MentionIcon />
             {t("files.mention")}
+          </button>
+        )}
+        {hovered && onCodeMenu && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onCodeMenu(node, event);
+            }}
+            title={t("files.renameItem")}
+            style={{
+              position: "absolute",
+              right: !node.isDir ? 28 : 4,
+              top: "50%",
+              transform: "translateY(-50%)",
+              width: 20,
+              height: 20,
+              padding: 0,
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              background: "var(--bg-panel)",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              fontSize: 12,
+              lineHeight: "18px",
+            }}
+          >
+            ⋯
           </button>
         )}
         {hovered && !node.isDir && (
@@ -514,6 +562,10 @@ export function TreeNode({
               highlightedPaths={highlightedPaths}
               gitStatusByPath={gitStatusByPath}
               changedDirectoryPaths={changedDirectoryPaths}
+              selectedDir={selectedDir}
+              onSelectDir={onSelectDir}
+              inCodeZone={inCodeZone}
+              onCodeMenu={onCodeMenu}
               t={t}
             />
           ))}
@@ -665,12 +717,17 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   onChangesCountChange,
   fileSearchOpen = false,
   onFileSearchOpenChange,
+  onUploadDirChange,
 }, ref) {
   const { t } = useI18n();
   const [roots, setRoots] = useState<FileNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const [selectedDir, setSelectedDir] = useState(cwd);
+  const [codeChildren, setCodeChildren] = useState<FileNode[]>([]);
+  const [codeMenu, setCodeMenu] = useState<{ node: FileNode; x: number; y: number } | null>(null);
+  const [mutateError, setMutateError] = useState<string | null>(null);
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   const [highlightedPaths, setHighlightedPaths] = useState<Set<string>>(new Set());
   const [gitFiles, setGitFiles] = useState<GitFileStatus[]>([]);
@@ -788,10 +845,89 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     });
   }, []);
 
-  const uploadDir = useMemo(
-    () => uploadDirFromExpanded(cwd, expandedPaths),
-    [cwd, expandedPaths],
+  const codeNode = useMemo(
+    () => roots.find((node) => node.name === "code" && node.isDir) ?? null,
+    [roots],
   );
+  const dataRoots = useMemo(
+    () => (codeNode ? roots.filter((node) => node !== codeNode) : roots),
+    [roots, codeNode],
+  );
+  const uploadDir = useMemo(
+    () => uploadDirFromSelection(cwd, selectedDir),
+    [cwd, selectedDir],
+  );
+  const codeRootPath = codeNode?.fullPath ?? "";
+  const codeHomePath = codeRootPath ? joinFilePath(codeRootPath, "home") : "";
+  const codeParent = useMemo(() => {
+    if (!codeRootPath) return "";
+    if (selectedDir === codeRootPath) return codeHomePath;
+    if (selectedDir.startsWith(`${codeRootPath}/`)) return selectedDir;
+    return codeHomePath;
+  }, [codeHomePath, codeRootPath, selectedDir]);
+
+  const refreshCodeTree = useCallback(() => {
+    setTreeRefreshKey((key) => key + 1);
+  }, []);
+
+  const runCodeMutate = useCallback(async (target: string, body: Record<string, string>) => {
+    setMutateError(null);
+    setCodeMenu(null);
+    try {
+      await mutateCodePath(target, body);
+      refreshCodeTree();
+    } catch (error) {
+      setMutateError(error instanceof Error ? error.message : String(error));
+    }
+  }, [refreshCodeTree]);
+
+  const resolveCodeDest = useCallback((relative: string) => {
+    const name = relative.replace(/^\/+|\/+$/g, "").replace(/^code\//, "");
+    return name ? joinFilePath(codeRootPath, name) : codeRootPath;
+  }, [codeRootPath]);
+
+  const handleCodeCreate = useCallback((kind: "mkdir" | "create-file") => {
+    if (!codeParent) return;
+    const name = window.prompt(t(kind === "mkdir" ? "files.promptFolder" : "files.promptFile"));
+    if (!name) return;
+    void runCodeMutate(codeParent, { action: kind, name });
+  }, [codeParent, runCodeMutate, t]);
+
+  const handleCodeAction = useCallback((action: string, node: FileNode) => {
+    if (action === "rename") {
+      const name = window.prompt(t("files.promptRename"), node.name);
+      if (!name || name === node.name) return;
+      void runCodeMutate(node.fullPath, { action: "rename", name });
+      return;
+    }
+    if (action === "move") {
+      const dest = window.prompt(t("files.promptMove"), "code");
+      if (!dest) return;
+      void runCodeMutate(node.fullPath, { action: "move", to: resolveCodeDest(dest) });
+      return;
+    }
+    if (action === "merge") {
+      const dest = window.prompt(t("files.promptMerge"));
+      if (!dest) return;
+      void runCodeMutate(node.fullPath, { action: "merge", to: resolveCodeDest(dest) });
+      return;
+    }
+    if (action === "delete") {
+      if (!window.confirm(t("files.confirmDelete", { name: node.name }))) return;
+      void runCodeMutate(node.fullPath, { action: "delete" });
+    }
+  }, [resolveCodeDest, runCodeMutate, t]);
+
+  const openCodeMenu = useCallback((node: FileNode, event: React.MouseEvent) => {
+    setCodeMenu({ node, x: event.clientX, y: event.clientY });
+  }, []);
+
+  useEffect(() => {
+    if (!codeMenu) return;
+    const close = () => setCodeMenu(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [codeMenu]);
 
   const applyUploadResult = useCallback((data: UploadResponse) => {
     const uploaded = data.uploaded ?? [];
@@ -890,6 +1026,29 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     onUploadBusyChange?.(uploadBusy);
   }, [onUploadBusyChange, uploadBusy]);
 
+  useEffect(() => {
+    onUploadDirChange?.(uploadDir);
+  }, [onUploadDirChange, uploadDir]);
+
+  useEffect(() => {
+    if (!codeNode) {
+      setCodeChildren([]);
+      return;
+    }
+    let cancelled = false;
+    fetchEntries(codeNode.fullPath)
+      .then((entries) => { if (!cancelled) setCodeChildren(entries); })
+      .catch(() => { if (!cancelled) setCodeChildren([]); });
+    setSelectedDir((prev) => {
+      const root = normalizeFilePathSlashes(cwd).replace(/\/+$/, "");
+      const current = normalizeFilePathSlashes(prev).replace(/\/+$/, "");
+      const home = joinFilePath(codeNode.fullPath, "home");
+      if (current && current !== root && current.startsWith(`${root}/`)) return prev;
+      return home;
+    });
+    return () => { cancelled = true; };
+  }, [codeNode, cwd, refreshToken]);
+
   useEffect(() => () => onUploadBusyChange?.(false), [onUploadBusyChange]);
 
   useEffect(() => {
@@ -900,6 +1059,8 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     if (cwdChanged) {
       setExpandedPaths(new Set());
       setHighlightedPaths(new Set());
+      setSelectedDir(cwd);
+      setCodeChildren([]);
       setUploadSummary(null);
       setPendingConflict(null);
       setUploadError(null);
@@ -1126,6 +1287,10 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
                     highlightedPaths={highlightedPaths}
                     gitStatusByPath={gitStatusByPath}
                     changedDirectoryPaths={changedDirectoryPaths}
+                    selectedDir={selectedDir}
+                    onSelectDir={setSelectedDir}
+                    inCodeZone={node.fullPath.includes("/code")}
+                    onCodeMenu={node.fullPath.includes("/code") ? openCodeMenu : undefined}
                     t={t}
                   />
                 ))}
@@ -1172,23 +1337,150 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
           ) : error ? (
             <div style={{ padding: "8px 12px", fontSize: 11, color: "#f87171" }}>{error}</div>
           ) : (
-            roots.map((node) => (
-              <TreeNode
-                key={node.fullPath}
-                node={node}
-                depth={0}
-                cwd={cwd}
-                onOpenFile={onOpenFile}
-                onAtMention={onAtMention}
-                expandedPaths={expandedPaths}
-                onToggleExpanded={handleToggleExpanded}
-                refreshToken={refreshToken}
-                highlightedPaths={highlightedPaths}
-                gitStatusByPath={gitStatusByPath}
-                changedDirectoryPaths={changedDirectoryPaths}
-                t={t}
-              />
-            ))
+            <>
+              {codeNode ? (
+                <div
+                  style={{
+                    marginBottom: 6,
+                    padding: "2px 0 4px",
+                    borderRadius: 6,
+                    background: "color-mix(in srgb, #3b82f6 9%, transparent)",
+                    border: "1px solid color-mix(in srgb, #3b82f6 28%, var(--border))",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, paddingRight: 6 }}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDir(joinFilePath(codeNode.fullPath, "home"))}
+                      title={codeNode.fullPath}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        flex: 1,
+                        height: 22,
+                        padding: "0 10px",
+                        border: "none",
+                        background: selectedDir === codeNode.fullPath
+                          ? "color-mix(in srgb, #3b82f6 18%, transparent)"
+                          : "transparent",
+                        color: "#2563eb",
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: 0.4,
+                        textTransform: "uppercase",
+                        cursor: "pointer",
+                        textAlign: "left",
+                      }}
+                    >
+                      {t("files.codeZone")}
+                    </button>
+                    <button type="button" onClick={() => handleCodeCreate("create-file")} title={t("files.newFile")} style={{ height: 18, padding: "0 5px", border: "1px solid color-mix(in srgb, #3b82f6 35%, var(--border))", borderRadius: 4, background: "transparent", color: "#2563eb", cursor: "pointer", fontSize: 10 }}>
+                      +f
+                    </button>
+                    <button type="button" onClick={() => handleCodeCreate("mkdir")} title={t("files.newFolder")} style={{ height: 18, padding: "0 5px", border: "1px solid color-mix(in srgb, #3b82f6 35%, var(--border))", borderRadius: 4, background: "transparent", color: "#2563eb", cursor: "pointer", fontSize: 10 }}>
+                      +d
+                    </button>
+                  </div>
+                  <div style={{ padding: "2px 10px 4px", fontSize: 10, color: "#2563eb" }}>
+                    {t("files.codeHomeHint")}
+                  </div>
+                  {codeChildren.map((node) => (
+                    <TreeNode
+                      key={node.fullPath}
+                      node={node}
+                      depth={0}
+                      cwd={cwd}
+                      onOpenFile={onOpenFile}
+                      onAtMention={onAtMention}
+                      expandedPaths={expandedPaths}
+                      onToggleExpanded={handleToggleExpanded}
+                      refreshToken={refreshToken}
+                      highlightedPaths={highlightedPaths}
+                      gitStatusByPath={gitStatusByPath}
+                      changedDirectoryPaths={changedDirectoryPaths}
+                      selectedDir={selectedDir}
+                      onSelectDir={setSelectedDir}
+                      inCodeZone
+                      onCodeMenu={openCodeMenu}
+                      t={t}
+                    />
+                  ))}
+                </div>
+              ) : null}
+              {dataRoots.map((node) => (
+                <TreeNode
+                  key={node.fullPath}
+                  node={node}
+                  depth={0}
+                  cwd={cwd}
+                  onOpenFile={onOpenFile}
+                  onAtMention={onAtMention}
+                  expandedPaths={expandedPaths}
+                  onToggleExpanded={handleToggleExpanded}
+                  refreshToken={refreshToken}
+                  highlightedPaths={highlightedPaths}
+                  gitStatusByPath={gitStatusByPath}
+                  changedDirectoryPaths={changedDirectoryPaths}
+                  selectedDir={selectedDir}
+                  onSelectDir={setSelectedDir}
+                  t={t}
+                />
+              ))}
+            </>
+          )}
+          {!loading && !error && (
+            <div style={{ padding: "4px 10px 2px", fontSize: 10, color: "#2563eb" }}>
+              {t("files.uploadTarget", { path: getRelativeFilePath(uploadDir, cwd) || "." })}
+            </div>
+          )}
+          {mutateError && (
+            <div role="alert" style={{ padding: "4px 10px", fontSize: 10, color: "#f87171" }}>
+              {t("files.mutateFailed", { error: mutateError })}
+            </div>
+          )}
+          {codeMenu && (
+            <div
+              role="menu"
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                position: "fixed",
+                left: codeMenu.x,
+                top: codeMenu.y,
+                zIndex: 40,
+                minWidth: 120,
+                padding: 4,
+                background: "var(--bg-panel)",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                boxShadow: "0 8px 20px rgba(0,0,0,0.12)",
+              }}
+            >
+              {(["rename", "move", ...(codeMenu.node.isDir ? ["merge"] as const : []), "delete"] as const).map((action) => (
+                <button
+                  key={action}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => handleCodeAction(action, codeMenu.node)}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    height: 24,
+                    padding: "0 8px",
+                    border: "none",
+                    background: "transparent",
+                    color: action === "delete" ? "#f87171" : "var(--text)",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontSize: 11,
+                  }}
+                >
+                  {action === "rename" ? t("files.renameItem")
+                    : action === "move" ? t("files.moveItem")
+                    : action === "merge" ? t("files.mergeFolder")
+                    : t("files.deleteItem")}
+                </button>
+              ))}
+            </div>
           )}
           {!loading && !error && roots.length === 0 && (
             <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>

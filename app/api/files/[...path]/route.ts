@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import {
   allowFileRoot,
+  denyCrossAdminPath,
   getAllowedFileRoots,
   isExistingFilePathAllowed,
   isFilePathAllowed,
@@ -30,7 +31,15 @@ import {
   validateUploadFileNames,
 } from "@/lib/file-upload";
 import { parseFormDataWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
-import { canMountVirtualCode, resolveDualRootPath, VIRTUAL_CODE_DIR } from "@/lib/dual-roots";
+import { mutateCodeEntry } from "@/lib/code-mutate";
+import {
+  canMountVirtualCode,
+  isVirtualCodeMount,
+  listVirtualCodeChildren,
+  resolveDualRootPath,
+  VIRTUAL_CODE_DIR,
+  VIRTUAL_CODE_HOME,
+} from "@/lib/dual-roots";
 import { isDatePoolRoot } from "@/lib/web-bash-guard";
 import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 import { filePathFromApiSegments, samePath } from "@/lib/paths";
@@ -82,7 +91,13 @@ async function getUploadDirectory(
 > {
   const admin = (await resolveCurrentAdminAsync()) || adminFromRequest(request);
   const requested = filePathFromApiSegments(segments);
-  const directory = resolveDualRootPath(requested, admin);
+  const directory = resolveDualRootPath(
+    isVirtualCodeMount(requested, admin) ? path.join(requested, VIRTUAL_CODE_HOME) : requested,
+    admin,
+  );
+  if (denyCrossAdminPath(directory, admin)) {
+    return { response: NextResponse.json({ error: "Access denied" }, { status: 403 }) };
+  }
   const allowedRoots = await getAllowedFileRoots();
   if (!isFilePathAllowed(directory, allowedRoots)) {
     return { response: NextResponse.json({ error: "Access denied" }, { status: 403 }) };
@@ -159,6 +174,16 @@ export async function POST(
     const { path: segments } = await params;
     const type = request.nextUrl.searchParams.get("type") ?? "upload";
     if (type === "allow-link") return allowLinkedDirectory(request, segments);
+    if (type === "mutate") {
+      if (!hasJsonContentType(request)) {
+        return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+      }
+      const admin = (await resolveCurrentAdminAsync()) || adminFromRequest(request);
+      const requested = filePathFromApiSegments(segments);
+      const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+      const result = await mutateCodeEntry(admin, requested, body ?? {});
+      return NextResponse.json(result.payload, { status: result.status });
+    }
 
     const uploadDirectory = await getUploadDirectory(segments, request);
     if ("response" in uploadDirectory) return uploadDirectory.response;
@@ -459,7 +484,7 @@ export async function GET(
     // only an encoded slash inside a segment still carries one here. The
     // existing-path check refuses them too, but a file referenced by the
     // session skips that check.
-    if (hasParentDirectorySegment(filePath)) {
+    if (hasParentDirectorySegment(filePath) || denyCrossAdminPath(filePath, admin) || denyCrossAdminPath(requestedPath, admin)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
     const rawType = request.nextUrl.searchParams.get("type") ?? "list";
@@ -468,6 +493,25 @@ export async function GET(
       return NextResponse.json({ error: "Invalid file request type" }, { status: 400 });
     }
     const sessionId = request.nextUrl.searchParams.get("sessionId");
+
+    if (isVirtualCodeMount(requestedPath, admin)) {
+      if (type !== "list") {
+        return NextResponse.json({ error: "Not a directory" }, { status: 400 });
+      }
+      const allowedRoots = await getAllowedFileRoots();
+      if (!isFilePathAllowed(requestedPath, allowedRoots)) {
+        return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      }
+      return NextResponse.json({
+        entries: listVirtualCodeChildren(admin).map((child) => ({
+          name: child.name,
+          isDir: true,
+          size: 0,
+          modified: "",
+        })),
+        path: requestedPath,
+      });
+    }
 
     const allowedRoots = await getAllowedFileRoots();
     const allowedByRoot = isFilePathAllowed(filePath, allowedRoots);

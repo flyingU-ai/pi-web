@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { listAllSessions } from "@/lib/session-reader";
 import { searchSessionContents } from "@/lib/session-search";
+import { withWebAdmin } from "@/lib/web-admin-scope";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  return withWebAdmin(request, () => searchSessions(request));
+}
+
+async function searchSessions(request: Request) {
   const query = (new URL(request.url).searchParams.get("q") ?? "").trim();
   const headers = { "Cache-Control": "no-store" };
   if (query.length > 200) {

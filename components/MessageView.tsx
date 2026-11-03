@@ -12,7 +12,7 @@ import { getAssistantErrorMessage, getThinkingPreview, hasAssistantAnswer, isAss
 import { parseUnifiedPatch, type SplitDiffCell, type SplitDiffFile } from "@/lib/patch";
 import { applyPatchPreviewToFiles, applyPatchResultHasFailures, extractApplyPatchPaths, getApplyPatchInputText, parseApplyPatchInput } from "@/lib/apply-patch";
 import { isApplyPatchToolName, isEditToolName, isWriteToolName } from "@/lib/tool-names";
-import { isToolCallExpanded, setToolCallExpanded } from "@/lib/tool-call-expansion";
+import { isPageReceiptTool, isToolCallExpanded, setToolCallExpanded } from "@/lib/tool-call-expansion";
 import { isThinkingExpandedByDefault, THINKING_EXPANDED_EVENT } from "@/lib/thinking-expansion-preference";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
 import type { WrittenFile } from "@/lib/turn-written-files";
@@ -1114,7 +1114,14 @@ function isSubagentToolDetails(value: unknown): value is SubagentToolDetails {
 
 function ToolCallBlock({ block, result, duration, onOpenSession }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number; onOpenSession?: (sessionId: string) => void }) {
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(() => isToolCallExpanded(block.toolCallId));
+  const [expanded, setExpanded] = useState(() => {
+    if (isToolCallExpanded(block.toolCallId)) return true;
+    if (isPageReceiptTool(block)) {
+      setToolCallExpanded(block.toolCallId, true);
+      return true;
+    }
+    return false;
+  });
   const toggleExpanded = () => {
     const next = !expanded;
     setToolCallExpanded(block.toolCallId, next);

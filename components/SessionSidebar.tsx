@@ -15,6 +15,7 @@ import { useResizablePanel } from "@/hooks/useResizablePanel";
 import { useScrollbarVisibility } from "@/hooks/useScrollbarVisibility";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { DismissButton } from "./DismissButton";
+import { getRelativeFilePath } from "@/lib/file-paths";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { SessionSearch } from "./SessionSearch";
 
@@ -181,6 +182,16 @@ interface ValidatedProject {
 
 const UNREAD_SESSIONS_STORAGE_KEY = "pi-web:unread-session-ids";
 const LAST_CUSTOM_CWD_STORAGE_KEY = "pi-web:last-custom-cwd";
+
+function lastCustomCwdKey(): string {
+  try {
+    const admin = new URLSearchParams(window.location.search).get("admin") || "";
+    const name = admin.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80);
+    return `${LAST_CUSTOM_CWD_STORAGE_KEY}:${name && name !== "." && name !== ".." ? name : "_none"}`;
+  } catch {
+    return `${LAST_CUSTOM_CWD_STORAGE_KEY}:_none`;
+  }
+}
 const RUNNING_SESSIONS_POLL_MS = 2500;
 const SESSION_DETAILS_HYDRATION_DELAY_MS = 750;
 const SESSION_PANE_DEFAULT_HEIGHT = 320;
@@ -191,7 +202,7 @@ const SESSION_PANE_MAX_HEIGHT = 1600;
 function loadLastCustomCwd(): string {
   if (typeof window === "undefined") return "";
   try {
-    return window.localStorage.getItem(LAST_CUSTOM_CWD_STORAGE_KEY) ?? "";
+    return window.localStorage.getItem(lastCustomCwdKey()) ?? "";
   } catch {
     return "";
   }
@@ -200,7 +211,7 @@ function loadLastCustomCwd(): string {
 function saveLastCustomCwd(cwd: string): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(LAST_CUSTOM_CWD_STORAGE_KEY, cwd);
+    window.localStorage.setItem(lastCustomCwdKey(), cwd);
   } catch {
     // Persistence is best-effort.
   }
@@ -430,6 +441,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [explorerKey, setExplorerKey] = useState(0);
   const [explorerUploadBusy, setExplorerUploadBusy] = useState(false);
+  const [explorerUploadDir, setExplorerUploadDir] = useState("");
   const [fileSearchOpen, setFileSearchOpen] = useState(false);
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState("");
@@ -2031,7 +2043,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               <ToolbarIconButton
                 onClick={() => fileExplorerRef.current?.openUploadPicker()}
                 disabled={explorerUploadBusy}
-                title={t("sidebar.uploadFilesTitle")}
+                title={explorerUploadDir
+                  ? t("sidebar.uploadFilesTitleTo", {
+                    path: getRelativeFilePath(explorerUploadDir, selectedCwd ?? selectedCwdProp ?? "") || ".",
+                  })
+                  : t("sidebar.uploadFilesTitle")}
                 color="var(--text-dim)"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -2087,6 +2103,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 onChangesCountChange={setChangesCount}
                 fileSearchOpen={fileSearchOpen}
                 onFileSearchOpenChange={setFileSearchOpen}
+                onUploadDirChange={setExplorerUploadDir}
               />
             </div>
           )}

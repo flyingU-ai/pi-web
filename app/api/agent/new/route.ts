@@ -5,6 +5,7 @@ import { randomUUID } from "crypto";
 import { allowFileRoot } from "@/lib/file-access";
 import { invalidateSessionListCache } from "@/lib/session-reader";
 import { startRpcSession } from "@/lib/rpc-manager";
+import { withWebAdmin } from "@/lib/web-admin-scope";
 
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -20,6 +21,10 @@ function parseThinkingLevel(value: unknown): ThinkingLevel | undefined {
 // type:"ensure_session" only creates the runtime so clients can query commands.
 // Returns pi's real session id plus the model/thinking state selected at startup.
 export async function POST(req: Request) {
+  return withWebAdmin(req, () => createAgent(req));
+}
+
+async function createAgent(req: Request) {
   let commandType: string | undefined;
   let promptAccepted = false;
   try {

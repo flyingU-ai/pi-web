@@ -1,20 +1,122 @@
-/** Per-admin private code roots. DatePool stays the shared data cwd. */
+/** Extra repo mounts only. Every signed-in admin also gets a private code home. */
 
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { basename, join, resolve, sep } from "node:path";
 import { sanitizeWebAdmin, warehouseRoot } from "./web-admin-scope";
 
+export type ExtraMount = { name: string; path: string };
 export type AdminWorkspaceMap = Record<string, string>;
 
-function parseMap(raw: string): AdminWorkspaceMap {
+const RESERVED_MOUNT_NAMES = new Set(["", ".", "..", "home", "code", "data"]);
+
+export function codeHomesRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = String(env.PI_WEB_CODE_HOMES_ROOT || "").trim();
+  if (explicit) return resolve(explicit);
+  const data = String(env.ANNOTATION_WORKSPACE_ROOT || env.PI_WEB_OPEN_FOLDER || "").trim();
+  if (data) return join(resolve(data), ".agent", "code-homes");
+  const warehouse = warehouseRoot();
+  return warehouse ? join(warehouse, ".agent", "code-homes") : "";
+}
+
+export function adminCodeHome(
+  admin: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const name = sanitizeWebAdmin(admin);
+  const root = codeHomesRoot(env);
+  if (!name || !root) return "";
+  return join(root, name);
+}
+
+export function ensureAdminCodeHome(
+  admin: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const home = adminCodeHome(admin, env);
+  if (!home) return "";
+  if (!existsSync(home)) {
+    mkdirSync(home, { recursive: true });
+    const readme = join(home, "README.md");
+    if (!existsSync(readme)) {
+      writeFileSync(
+        readme,
+        `# ${sanitizeWebAdmin(admin)} code home\n\nUpload or create files here. This directory is private to your login.\n`,
+      );
+    }
+    try {
+      execFileSync("git", ["init"], { cwd: home, stdio: "ignore" });
+    } catch {
+      // git is optional; upload/CRUD still work without a repo
+    }
+  }
+  return home;
+}
+
+function mountNameFromPath(abs: string, taken: Set<string>): string {
+  const base = basename(abs).replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80);
+  let name = base && !RESERVED_MOUNT_NAMES.has(base) ? base : "repo";
+  if (!taken.has(name)) {
+    taken.add(name);
+    return name;
+  }
+  let i = 2;
+  while (taken.has(`${name}_${i}`)) i += 1;
+  name = `${name}_${i}`;
+  taken.add(name);
+  return name;
+}
+
+function extraFromValue(
+  value: unknown,
+  taken: Set<string>,
+  env: NodeJS.ProcessEnv,
+): ExtraMount[] {
+  const out: ExtraMount[] = [];
+  const push = (nameHint: string, rawPath: string) => {
+    const root = String(rawPath || "").trim();
+    if (!root || root.includes("pi-cwd") || !root.startsWith("/")) return;
+    const abs = resolve(root);
+    if (!existsSync(abs)) return;
+    const hint = String(nameHint || "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80);
+    const name = hint && !RESERVED_MOUNT_NAMES.has(hint) && !taken.has(hint)
+      ? (taken.add(hint), hint)
+      : mountNameFromPath(abs, taken);
+    out.push({ name, path: abs });
+  };
+  if (typeof value === "string") {
+    push("", value);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === "string") push("", item);
+      else if (item && typeof item === "object" && "path" in item) {
+        push(String((item as { name?: unknown }).name || ""), String((item as { path: unknown }).path));
+      }
+    }
+    return out;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      if (typeof item === "string") push(key, item);
+    }
+  }
+  void env;
+  return out;
+}
+
+function parseExtraDoc(raw: string, env: NodeJS.ProcessEnv): Record<string, ExtraMount[]> {
   try {
     const doc = JSON.parse(raw) as unknown;
     if (!doc || typeof doc !== "object" || Array.isArray(doc)) return {};
-    const out: AdminWorkspaceMap = {};
+    const out: Record<string, ExtraMount[]> = {};
     for (const [key, value] of Object.entries(doc)) {
       const admin = sanitizeWebAdmin(key);
-      const root = String(value || "").trim();
-      if (admin && root && !root.includes("pi-cwd")) out[admin] = resolve(root);
+      if (!admin) continue;
+      const taken = new Set<string>(RESERVED_MOUNT_NAMES);
+      const mounts = extraFromValue(value, taken, env);
+      if (mounts.length) out[admin] = mounts;
     }
     return out;
   } catch {
@@ -22,10 +124,12 @@ function parseMap(raw: string): AdminWorkspaceMap {
   }
 }
 
-export function loadAdminWorkspaces(env: NodeJS.ProcessEnv = process.env): AdminWorkspaceMap {
+export function loadAdminExtraMounts(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, ExtraMount[]> {
   const fromEnv = String(env.PI_WEB_ADMIN_WORKSPACES || "").trim();
   if (fromEnv.startsWith("{")) {
-    const parsed = parseMap(fromEnv);
+    const parsed = parseExtraDoc(fromEnv, env);
     if (Object.keys(parsed).length) return parsed;
   }
   const candidates = [
@@ -35,17 +139,76 @@ export function loadAdminWorkspaces(env: NodeJS.ProcessEnv = process.env): Admin
   ].filter(Boolean) as string[];
   for (const file of candidates) {
     if (!existsSync(file)) continue;
-    const parsed = parseMap(readFileSync(file, "utf8"));
+    const parsed = parseExtraDoc(readFileSync(file, "utf8"), env);
     if (Object.keys(parsed).length) return parsed;
   }
   return {};
 }
 
+/** Legacy map: first extra path per admin. Personal homes are not listed here. */
+export function loadAdminWorkspaces(env: NodeJS.ProcessEnv = process.env): AdminWorkspaceMap {
+  const out: AdminWorkspaceMap = {};
+  for (const [admin, mounts] of Object.entries(loadAdminExtraMounts(env))) {
+    if (mounts[0]) out[admin] = mounts[0].path;
+  }
+  return out;
+}
+
+export function extraMountsFor(
+  admin: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ExtraMount[] {
+  const name = sanitizeWebAdmin(admin);
+  if (!name) return [];
+  const mine = adminCodeHome(name, env);
+  const all = loadAdminExtraMounts(env);
+  return (all[name] || []).filter((mount) => {
+    if (mine && (mount.path === mine || mount.path.startsWith(mine + sep))) return false;
+    return !isForeignAdminCodePath(mount.path, name, env);
+  });
+}
+
+export function allAdminCodeRoots(
+  admin: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const home = ensureAdminCodeHome(admin, env);
+  const roots = new Set<string>();
+  if (home) roots.add(home);
+  for (const mount of extraMountsFor(admin, env)) roots.add(mount.path);
+  return [...roots];
+}
+
+/** Personal home. Extra repos are not the default root. */
 export function resolveAdminCodeRoot(
   admin: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
+  return adminCodeHome(admin, env);
+}
+
+export function isForeignAdminCodePath(
+  target: string,
+  admin: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const abs = resolve(String(target || ""));
   const name = sanitizeWebAdmin(admin);
-  if (!name) return "";
-  return loadAdminWorkspaces(env)[name] || "";
+  const homes = codeHomesRoot(env);
+  if (homes) {
+    const base = resolve(homes);
+    if (abs === base || abs.startsWith(base + sep)) {
+      if (!name) return true;
+      const mine = resolve(join(base, name));
+      return abs !== mine && !abs.startsWith(mine + sep);
+    }
+  }
+  for (const [other, mounts] of Object.entries(loadAdminExtraMounts(env))) {
+    if (other === name) continue;
+    for (const mount of mounts) {
+      const root = resolve(mount.path);
+      if (abs === root || abs.startsWith(root + sep)) return true;
+    }
+  }
+  return false;
 }

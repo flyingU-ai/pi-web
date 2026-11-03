@@ -7,6 +7,11 @@ export interface TerminalTab {
 
 export const TERMINAL_TABS_KEY = "pi-web:terminal-tabs";
 
+export function terminalTabsStorageKey(admin?: string): string {
+  const name = String(admin || "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80);
+  return `${TERMINAL_TABS_KEY}:${name && name !== "." && name !== ".." ? name : "_none"}`;
+}
+
 export function newTerminalTab(cwd: string): TerminalTab {
   const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
   return { id, cwd };

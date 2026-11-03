@@ -25,10 +25,18 @@ import type { SessionEntry } from "@/lib/types";
 import { readSubagentRun, readSubagentSessionResources, SUBAGENT_META_TYPE } from "@/lib/subagents";
 import { readSessionToolSelection } from "@/lib/session-tool-selection";
 import { jsonResponse } from "@/lib/json-response";
+import { withWebAdmin } from "@/lib/web-admin-scope";
 
 export async function GET(
   req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withWebAdmin(req, () => getSession(req, ctx));
+}
+
+async function getSession(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   const perf = startServerPerf("GET /api/sessions/[id]");
@@ -172,7 +180,14 @@ export async function GET(
 // PATCH /api/sessions/[id]  body: { name: string }
 export async function PATCH(
   req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withWebAdmin(req, () => patchSession(req, ctx));
+}
+
+async function patchSession(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   try {
@@ -198,8 +213,15 @@ export async function PATCH(
 
 // DELETE /api/sessions/[id]
 export async function DELETE(
+  req: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withWebAdmin(req, () => deleteSession(req, ctx));
+}
+
+async function deleteSession(
   _req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   try {

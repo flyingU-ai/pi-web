@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, type CSSProperties } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
@@ -16,7 +16,7 @@ import { SystemPromptPanel } from "./SystemPromptPanel";
 import { ToolDefinitionsPanel } from "./ToolDefinitionsPanel";
 import { AgentSessionPanel } from "./AgentSessionPanel";
 import { TerminalPanel } from "./TerminalPanel";
-import { newTerminalTab, restoreTerminalTabs, TERMINAL_TABS_KEY, type TerminalTab } from "./terminal-tab-state";
+import { newTerminalTab, restoreTerminalTabs, terminalTabsStorageKey, type TerminalTab } from "./terminal-tab-state";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile, useIsNarrowMobile } from "@/hooks/useIsMobile";
@@ -26,6 +26,7 @@ import { useAudio } from "@/hooks/useAudio";
 import { copyText } from "@/lib/clipboard";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { getFileName } from "@/lib/file-paths";
+import { PRODUCT_DISPLAY_NAME } from "@/lib/product";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
 import {
   claimExtensionAttentionNotification,
@@ -40,9 +41,15 @@ import { rekeyDraft } from "@/lib/draft-store";
 import {
   clearLastOpen,
   getLastOpenSession,
+  scopedWorkspaceKey,
   setLastOpenSession,
   workspaceKeyOf,
 } from "@/lib/workspace-memory";
+
+function adminFromSearch(): string {
+  if (typeof window === "undefined") return "";
+  return String(new URLSearchParams(window.location.search).get("admin") || "").trim();
+}
 import {
   getDefaultRightPanelWidth,
   getRightPanelMaxWidth,
@@ -80,6 +87,8 @@ function parkedNewSessionDraftKey(cwd: string): string {
 export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const adminName = searchParams.get("admin") || "";
+  const terminalStorageKey = terminalTabsStorageKey(adminName);
   const [initialNavigation, setInitialNavigation] = useState(() => getInitialNavigation(searchParams));
   // Keep the system-theme subscription mounted for the lifetime of the app.
   useTheme();
@@ -489,7 +498,7 @@ export function AppShell() {
 
   useEffect(() => {
     try {
-      const saved = restoreTerminalTabs(window.sessionStorage.getItem(TERMINAL_TABS_KEY));
+      const saved = restoreTerminalTabs(window.sessionStorage.getItem(terminalStorageKey));
       setTerminalTabs(saved.tabs);
       if (saved.activeId) {
         setActiveFileTabId(saved.activeId);
@@ -497,18 +506,18 @@ export function AppShell() {
       }
     } catch { /* storage is optional */ }
     setTerminalsRestored(true);
-  }, []);
+  }, [terminalStorageKey]);
 
   useEffect(() => {
     if (!terminalsRestored) return;
     try {
-      window.sessionStorage.setItem(TERMINAL_TABS_KEY, JSON.stringify({
+      window.sessionStorage.setItem(terminalStorageKey, JSON.stringify({
         tabs: terminalTabs.map(({ id, cwd }) => ({ id, cwd })),
         activeId: activeFileTabId,
         open: rightPanelOpen,
       }));
     } catch { /* storage is optional */ }
-  }, [terminalTabs, activeFileTabId, rightPanelOpen, terminalsRestored]);
+  }, [terminalTabs, activeFileTabId, rightPanelOpen, terminalsRestored, terminalStorageKey]);
 
   const handleFileViewerStateChange = useCallback((
     tabId: string,
@@ -572,7 +581,7 @@ export function AppShell() {
       const projectKey = selectedSession.projectKey
         ?? activeProjectKeyRef.current
         ?? workspaceKeyOf(selectedSession);
-      setLastOpenSession(projectKey, selectedSession.id);
+      setLastOpenSession(scopedWorkspaceKey(projectKey, adminFromSearch()), selectedSession.id);
       setTabOpenSession(selectedSession.id);
       return;
     }
@@ -584,8 +593,27 @@ export function AppShell() {
     if (!requestedCwd) return;
 
     const controller = new AbortController();
+    let timedOut = false;
+    const timer = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 8_000);
     setInitialCwdStatus("validating");
     setInitialCwdError(null);
+
+    const adoptCwd = (cwd: string) => {
+      // The sidebar will notify us when it adopts this cwd. Avoid remounting
+      // the just-created empty chat during that initial synchronization.
+      suppressCwdBumpRef.current = true;
+      const draftId = `initial:${requestedCwd}`;
+      setNewSessionDraftId(draftId);
+      activeNewSessionDraftKeyRef.current = `new:${draftId}:${cwd}`;
+      setNewSessionCwd(cwd);
+      setInitialCwdStatus("ready");
+      if (!new URLSearchParams(window.location.search).get("cwd")) {
+        router.replace(`?cwd=${encodeURIComponent(cwd)}`, { scroll: false });
+      }
+    };
 
     void fetch("/api/cwd/validate", {
       method: "POST",
@@ -598,26 +626,23 @@ export function AppShell() {
         if (!response.ok || !data.cwd) {
           throw new Error(data.error ?? `HTTP ${response.status}`);
         }
-
-        // The sidebar will notify us when it adopts this cwd. Avoid remounting
-        // the just-created empty chat during that initial synchronization.
-        suppressCwdBumpRef.current = true;
-        const draftId = `initial:${requestedCwd}`;
-        setNewSessionDraftId(draftId);
-        activeNewSessionDraftKeyRef.current = `new:${draftId}:${data.cwd}`;
-        setNewSessionCwd(data.cwd);
-        setInitialCwdStatus("ready");
-        if (!new URLSearchParams(window.location.search).get("cwd")) {
-          router.replace(`?cwd=${encodeURIComponent(data.cwd)}`, { scroll: false });
-        }
+        adoptCwd(data.cwd);
       })
       .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted && !timedOut) return;
+        if (timedOut) {
+          adoptCwd(requestedCwd);
+          return;
+        }
         setInitialCwdError(error instanceof Error ? error.message : String(error));
         setInitialCwdStatus("error");
-      });
+      })
+      .finally(() => window.clearTimeout(timer));
 
-    return () => controller.abort();
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [initialNavigation, router]);
 
   // Restore the workspace's last open session after switching to it. Called
@@ -626,7 +651,7 @@ export function AppShell() {
   // back to the default welcome page instead of erroring.
   const restoreWorkspaceContext = useCallback((projectKey: string, cwd: string) => {
     const token = ++workspaceRestoreTokenRef.current;
-    const lastOpenSessionId = getLastOpenSession(projectKey);
+    const lastOpenSessionId = getLastOpenSession(scopedWorkspaceKey(projectKey, adminFromSearch()));
     if (!lastOpenSessionId) return;
     const adopt = (d: { sessions: SessionInfo[] } | null) => {
       if (token !== workspaceRestoreTokenRef.current) return; // stale switch
@@ -635,12 +660,12 @@ export function AppShell() {
         // The list loaded but the remembered session is gone — forget it.
         // When the list itself failed (d === null) keep the memory so a
         // later switch retries the restore.
-        if (d) clearLastOpen(projectKey);
+        if (d) clearLastOpen(scopedWorkspaceKey(projectKey, adminFromSearch()));
         return;
       }
       if (workspaceKeyOf(s) !== projectKey) {
         // Defensive: the remembered session drifted out of this workspace.
-        clearLastOpen(projectKey);
+        clearLastOpen(scopedWorkspaceKey(projectKey, adminFromSearch()));
         return;
       }
       // Keep the temporary composer's draft in its cwd, even when the
@@ -1205,7 +1230,7 @@ export function AppShell() {
 
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
-  const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
+  const windowTitle = activeCwdName ? `${activeCwdName} - ${PRODUCT_DISPLAY_NAME}` : PRODUCT_DISPLAY_NAME;
 
   useEffect(() => {
     const syncWindowTitle = () => {
@@ -1923,7 +1948,10 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div style={{
+    <div
+      ref={rightPanelResizer.panelRef}
+      className={rightPanelOpen && !rightPanelFullWidth ? "layout-editor-center" : undefined}
+      style={{
       display: "flex",
       width: "100%",
       height: "var(--app-viewport-height, 100dvh)",
@@ -1931,7 +1959,8 @@ export function AppShell() {
       paddingRight: "env(safe-area-inset-right)",
       overflow: "hidden",
       background: "var(--bg)",
-    }}>
+      "--right-panel-width": `${rightPanelResizer.width}px`,
+    } as CSSProperties}>
       {/* Mobile overlay backdrop */}
       <div
         className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
@@ -1978,8 +2007,20 @@ export function AppShell() {
         />
       )}
 
-      {/* Center: chat */}
-      <div inert={rightPanelFullWidth} style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+      {/* Chat: center when idle, right when a file or terminal is open. */}
+      <div
+        className="chat-column"
+        inert={rightPanelFullWidth}
+        style={{
+          flex: rightPanelOpen && !rightPanelFullWidth ? "0 0 var(--right-panel-width, 420px)" : 1,
+          width: rightPanelOpen && !rightPanelFullWidth ? "var(--right-panel-width, 420px)" : undefined,
+          minWidth: rightPanelOpen && !rightPanelFullWidth ? 280 : 0,
+          maxWidth: rightPanelOpen && !rightPanelFullWidth ? "min(520px, 42vw)" : undefined,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
         {/* Top bar with sidebar toggle */}
         <div ref={topBarRef} style={{ flexShrink: 0, background: "var(--bg-panel)" }}>
         <div style={{ display: "flex", alignItems: "center", position: "relative", borderBottom: "1px solid var(--border)", height: "calc(36px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}>
@@ -2453,12 +2494,11 @@ export function AppShell() {
         id="file-panel"
         className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${rightPanelFullWidth ? " right-panel-full-width" : ""}${rightPanelResizer.isResizing ? " right-panel-resizing" : ""}`}
         style={{
-          "--right-panel-width": `${rightPanelResizer.width}px`,
           display: "flex",
           flexDirection: "column",
           borderLeft: "1px solid var(--border)",
           background: "var(--bg)",
-        } as React.CSSProperties}
+        }}
       >
         {/* Right panel tab bar */}
         <div style={{

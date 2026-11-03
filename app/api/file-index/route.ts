@@ -4,6 +4,7 @@ import { promisify } from "util";
 import fs from "fs";
 import path from "path";
 import {
+  denyCrossAdminPath,
   getAllowedFileRoots,
   isExistingFilePathAllowed,
   isFilePathAllowed,
@@ -11,7 +12,7 @@ import {
 } from "@/lib/file-access";
 import { buildEntriesFromFiles, filterFileEntries, type FileIndexEntry } from "@/lib/file-fuzzy";
 import { isHiddenOutsideGit } from "@/lib/file-tree-visibility";
-import { adminCodeRoot, canMountVirtualCode, VIRTUAL_CODE_DIR } from "@/lib/dual-roots";
+import { canMountVirtualCode, listVirtualCodeChildren, VIRTUAL_CODE_DIR } from "@/lib/dual-roots";
 import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 import { isDatePoolRoot, isPoolHeavyDir } from "@/lib/web-bash-guard";
 
@@ -136,7 +137,7 @@ export async function GET(req: NextRequest) {
 
     const admin = (await resolveCurrentAdminAsync()) || adminFromRequest(req);
     const allowedRoots = await getAllowedFileRoots();
-    if (!isFilePathAllowed(cwd, allowedRoots)) {
+    if (denyCrossAdminPath(cwd, admin) || !isFilePathAllowed(cwd, allowedRoots)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
@@ -155,22 +156,33 @@ export async function GET(req: NextRequest) {
 
     const cache = getIndexCache();
     const now = Date.now();
-    const codeRoot = canMountVirtualCode(cwd, admin) ? adminCodeRoot(admin) : "";
-    const cacheKey = codeRoot ? `${cwd}::${codeRoot}` : cwd;
+    const codeChildren = canMountVirtualCode(cwd, admin) ? listVirtualCodeChildren(admin) : [];
+    const cacheKey = codeChildren.length
+      ? `${cwd}::${admin}::${codeChildren.map((child) => child.path).join("|")}`
+      : `${cwd}::${admin || "_none"}`;
     let cached = cache.get(cacheKey);
     if (!cached || cached.expiresAt <= now) {
       let listing = isDatePoolRoot(cwd) || isPoolHeavyDir(cwd)
         ? listDatePoolTop(cwd)
         : (await listWithGit(cwd)) ?? listWithWalk(cwd);
-      if (codeRoot && (isDatePoolRoot(cwd) || isPoolHeavyDir(cwd))) {
-        const extra = (await listWithGit(codeRoot)) ?? listWithWalk(codeRoot);
+      if (codeChildren.length && (isDatePoolRoot(cwd) || isPoolHeavyDir(cwd))) {
+        const extras = await Promise.all(
+          codeChildren.map(async (child) => {
+            const listed = (await listWithGit(child.path)) ?? listWithWalk(child.path);
+            return {
+              files: listed.files.map((rel) => `${VIRTUAL_CODE_DIR}/${child.name}/${rel.replace(/^\/+/, "")}`),
+              hardTruncated: listed.hardTruncated,
+            };
+          }),
+        );
         listing = {
           files: [
             ...listing.files.filter((name) => name !== `${VIRTUAL_CODE_DIR}/` && !name.startsWith(`${VIRTUAL_CODE_DIR}/`)),
             `${VIRTUAL_CODE_DIR}/`,
-            ...extra.files.map((rel) => `${VIRTUAL_CODE_DIR}/${rel.replace(/^\/+/, "")}`),
+            ...codeChildren.map((child) => `${VIRTUAL_CODE_DIR}/${child.name}/`),
+            ...extras.flatMap((item) => item.files),
           ],
-          hardTruncated: listing.hardTruncated || extra.hardTruncated,
+          hardTruncated: listing.hardTruncated || extras.some((item) => item.hardTruncated),
         };
       }
       for (const [key, entry] of cache) {

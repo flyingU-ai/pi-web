@@ -1,8 +1,10 @@
 import { stat } from "fs/promises";
 import { resolve } from "path";
 import { NextResponse } from "next/server";
-import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { isForeignTermWorkspace, resolveTerminalCwd } from "@/lib/dual-roots";
+import { denyCrossAdminPath, getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { createTerminal } from "@/lib/terminal-manager";
+import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -16,7 +18,15 @@ export async function POST(req: Request) {
     if (typeof body.cwd !== "string" || !body.cwd.trim()) {
       return NextResponse.json({ error: "cwd required" }, { status: 400 });
     }
-    const cwd = resolve(body.cwd);
+    const admin = (await resolveCurrentAdminAsync()) || adminFromRequest(req);
+    if (isForeignTermWorkspace(body.cwd, admin) || denyCrossAdminPath(body.cwd, admin)) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+    const rewritten = resolveTerminalCwd(body.cwd, admin);
+    if (!rewritten) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+    const cwd = resolve(rewritten);
     if (!(await stat(cwd)).isDirectory()) {
       return NextResponse.json({ error: "cwd must be a directory" }, { status: 400 });
     }

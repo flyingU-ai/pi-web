@@ -1,9 +1,9 @@
 "use client";
 
-import Image from "next/image";
 import { useState, type FormEvent } from "react";
 import { I18nProvider, useI18n } from "@/hooks/useI18n";
 import { safeLoginDestination } from "@/lib/login-destination";
+import { PRODUCT_DISPLAY_NAME } from "@/lib/product";
 
 function safeDestination(): string {
   const destination = new URLSearchParams(window.location.search).get("next");
@@ -49,9 +49,27 @@ function LoginForm() {
     <main className="web-login-page">
       <div className="web-login-shell">
         <header className="web-login-brand">
-          <Image src="/icons/apple-touch-icon.png" width={52} height={52} alt="" priority />
+          <span
+            aria-hidden
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: "50%",
+              background: "#4A7C59",
+              color: "#fff",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 700,
+              fontSize: 24,
+              flexShrink: 0,
+              fontFamily: "system-ui, sans-serif",
+            }}
+          >
+            A
+          </span>
           <div>
-            <h1>Pi Web</h1>
+            <h1>{PRODUCT_DISPLAY_NAME}</h1>
             <p>{t("auth.prompt")}</p>
           </div>
         </header>

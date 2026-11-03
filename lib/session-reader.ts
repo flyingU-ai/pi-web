@@ -13,6 +13,7 @@ import { sessionPathKey } from "./session-path";
 import { MAX_TOOL_RESULT_IMAGE_BYTES, TOOL_RESULT_IMAGE_MIMES } from "./tool-result-images";
 import { resolveProject, type ProjectInfo } from "./worktree";
 import { readSubagentRun, SUBAGENT_META_TYPE } from "./subagents";
+import { fileIsUnder, resolveWebSessionDir, resolveWebSessionDirAsync } from "./web-admin-scope";
 import { listSessionsIncremental, type ScannedSessionInfo } from "./session-list-scanner";
 
 export { getAgentDir };
@@ -240,8 +241,25 @@ async function buildSessionList(scanned: ScannedSessionInfo[]): Promise<SessionI
   return attachSessionProjectInfo(scanned.map((session) => mapScannedSession(session, pathToId)));
 }
 
+async function resolveSessionsDir(): Promise<string> {
+  return (await resolveWebSessionDirAsync()) ?? join(getAgentDir(), "sessions");
+}
+
+function getListCacheByDir(): Map<string, { data: SessionInfo[]; ts: number; generation: number }> {
+  if (!globalThis.__piSessionListCacheByDir) globalThis.__piSessionListCacheByDir = new Map();
+  return globalThis.__piSessionListCacheByDir;
+}
+
+function getListPromiseByDir(): Map<string, { promise: Promise<SessionInfo[]>; generation: number }> {
+  if (!globalThis.__piSessionListPromiseByDir) globalThis.__piSessionListPromiseByDir = new Map();
+  return globalThis.__piSessionListPromiseByDir;
+}
+
 async function loadAllSessions(): Promise<SessionInfo[]> {
-  return buildSessionList(await listSessionsIncremental());
+  const scoped = await resolveWebSessionDirAsync();
+  return buildSessionList(
+    await listSessionsIncremental(scoped ? { sessionsDir: scoped } : {}),
+  );
 }
 
 /**
@@ -250,16 +268,20 @@ async function loadAllSessions(): Promise<SessionInfo[]> {
  * counts, names, and first messages afterwards.
  */
 export async function listSessionSummaries(): Promise<SessionInfo[]> {
-  return buildSessionList(await listSessionsIncremental({ deferDetails: true }));
+  const scoped = await resolveWebSessionDirAsync();
+  return buildSessionList(
+    await listSessionsIncremental(scoped ? { deferDetails: true, sessionsDir: scoped } : { deferDetails: true }),
+  );
 }
 
 export async function listAllSessions(options: { force?: boolean; allowStale?: boolean } = {}): Promise<SessionInfo[]> {
   if (options.force) invalidateSessionListCache();
   const generation = globalThis.__piSessionListGeneration ?? 0;
+  const dir = await resolveSessionsDir();
 
-  // Return cached result if still fresh (avoids re-scanning session files
-  // and re-spawning git processes on every page load).
-  const cache = globalThis.__piSessionListCache;
+  // Per-admin cache: one process serves many accounts; a shared slot would leak.
+  const cacheMap = getListCacheByDir();
+  const cache = cacheMap.get(dir);
   if (cache && cache.generation === generation && Date.now() - cache.ts < SESSION_LIST_CACHE_TTL_MS) {
     return cache.data;
   }
@@ -274,10 +296,10 @@ export async function listAllSessions(options: { force?: boolean; allowStale?: b
     return cache.data;
   }
 
-  // Coalescing dedup: concurrent callers share the same in-flight promise
-  // only while it belongs to the current cache generation.
-  if (globalThis.__piSessionListPromise && globalThis.__piSessionListPromiseGeneration === generation) {
-    return globalThis.__piSessionListPromise;
+  const inflightMap = getListPromiseByDir();
+  const inflight = inflightMap.get(dir);
+  if (inflight && inflight.generation === generation) {
+    return inflight.promise;
   }
 
   const loadPromise = loadAllSessions().then((data) => {
@@ -287,18 +309,15 @@ export async function listAllSessions(options: { force?: boolean; allowStale?: b
     if ((globalThis.__piSessionListGeneration ?? 0) !== generation) {
       return listAllSessions();
     }
-    globalThis.__piSessionListCache = { data, ts: Date.now(), generation };
+    cacheMap.set(dir, { data, ts: Date.now(), generation });
     return data;
   });
   const trackedPromise = loadPromise.finally(() => {
-    if (globalThis.__piSessionListPromise === trackedPromise) {
-      globalThis.__piSessionListPromise = undefined;
-      globalThis.__piSessionListPromiseGeneration = undefined;
-    }
+    const cur = inflightMap.get(dir);
+    if (cur?.promise === trackedPromise) inflightMap.delete(dir);
   });
 
-  globalThis.__piSessionListPromise = trackedPromise;
-  globalThis.__piSessionListPromiseGeneration = generation;
+  inflightMap.set(dir, { promise: trackedPromise, generation });
   return trackedPromise;
 }
 
@@ -312,13 +331,15 @@ declare global {
   var __piSessionListPromiseGeneration: number | undefined;
   var __piSessionListGeneration: number | undefined;
   var __piSessionListCache: { data: SessionInfo[]; ts: number; generation: number } | undefined;
+  var __piSessionListCacheByDir: Map<string, { data: SessionInfo[]; ts: number; generation: number }> | undefined;
+  var __piSessionListPromiseByDir: Map<string, { promise: Promise<SessionInfo[]>; generation: number }> | undefined;
 }
 
 const SESSION_LIST_CACHE_TTL_MS = 30_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
 function defaultSessionsDir(): string {
-  return join(getAgentDir(), "sessions");
+  return resolveWebSessionDir() ?? join(getAgentDir(), "sessions");
 }
 
 function resolvePathWithinDefaultSessions(
@@ -341,7 +362,7 @@ async function findSessionPathById(sessionId: string): Promise<string | null> {
   if (!SESSION_ID_PATTERN.test(sessionId)) return null;
 
   let projectDirs: Dirent[];
-  const sessionsDir = resolvePath(defaultSessionsDir());
+  const sessionsDir = resolvePath(await resolveSessionsDir());
   try {
     projectDirs = await readdir(sessionsDir, { withFileTypes: true });
   } catch {
@@ -350,7 +371,27 @@ async function findSessionPathById(sessionId: string): Promise<string | null> {
 
   const suffix = `_${sessionId}.jsonl`;
   let match: string | undefined;
+
+  const consider = async (filePath: string): Promise<boolean> => {
+    const candidate = resolvePathWithinDefaultSessions(filePath, sessionsDir);
+    if (!candidate) return false;
+    try {
+      if (readSessionHeader(candidate)?.id !== sessionId) return false;
+    } catch {
+      return false;
+    }
+    if (match && match !== candidate) return true;
+    match = candidate;
+    return false;
+  };
+
   for (const projectDir of projectDirs) {
+    if (projectDir.isFile() && projectDir.name.endsWith(".jsonl")) {
+      if (projectDir.name.endsWith(suffix) || projectDir.name === `${sessionId}.jsonl`) {
+        if (await consider(join(sessionsDir, projectDir.name))) return null;
+      }
+      continue;
+    }
     if (!projectDir.isDirectory() && !projectDir.isSymbolicLink()) continue;
     const projectPath = resolvePathWithinDefaultSessions(
       join(sessionsDir, projectDir.name),
@@ -367,20 +408,7 @@ async function findSessionPathById(sessionId: string): Promise<string | null> {
 
     for (const file of files) {
       if (!file.endsWith(suffix)) continue;
-      const candidate = resolvePathWithinDefaultSessions(
-        join(projectPath, file),
-        sessionsDir,
-      );
-      if (!candidate) continue;
-      try {
-        if (readSessionHeader(candidate)?.id !== sessionId) continue;
-      } catch {
-        continue;
-      }
-      // Do not choose between duplicate candidates; retain the existing
-      // catalogue fallback for its current resolution semantics.
-      if (match && match !== candidate) return null;
-      match = candidate;
+      if (await consider(join(projectPath, file))) return null;
     }
   }
 
@@ -513,14 +541,15 @@ export function openSessionManager(
   filePath: string,
   options: { mutable?: boolean } = {},
 ): SessionManager {
-  if (options.mutable) return SessionManager.open(filePath, undefined);
+  const sessionDir = resolveWebSessionDir() ?? undefined;
+  if (options.mutable) return SessionManager.open(filePath, sessionDir);
 
   const cache = getSmCache();
   const pathKey = sessionPathKey(filePath);
   const stats = sessionFileStats(filePath);
   if (stats === null) {
     cache.delete(pathKey);
-    return SessionManager.open(filePath, undefined);
+    return SessionManager.open(filePath, sessionDir);
   }
 
   const cached = cache.get(pathKey);
@@ -531,7 +560,7 @@ export function openSessionManager(
     return cached.sm as SessionManager;
   }
 
-  const sm = SessionManager.open(filePath, undefined);
+  const sm = SessionManager.open(filePath, sessionDir);
   if (stats.bytes > SM_CACHE_LIMITS.maxFileBytes) {
     // Too large to hold: drop any stale entry for this path and serve fresh.
     cache.delete(pathKey);
@@ -543,8 +572,9 @@ export function openSessionManager(
 }
 
 export async function resolveSessionPath(sessionId: string): Promise<string | null> {
+  const sessionsDir = resolvePath(await resolveSessionsDir());
   const cached = getPathCache().get(sessionId);
-  if (cached) return cached;
+  if (cached && fileIsUnder(cached, sessionsDir)) return cached;
 
   const targetedPath = await findSessionPathById(sessionId);
   if (targetedPath) {

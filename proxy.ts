@@ -15,6 +15,33 @@ import {
   PI_WEB_SESSION_COOKIE,
 } from "@/lib/web-auth";
 
+function sanitizeWebAdmin(admin: string): string {
+  const name = String(admin || "")
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .slice(0, 80);
+  if (!name || name === "." || name === "..") return "";
+  return name;
+}
+
+function withAdminCookie(request: NextRequest, res: NextResponse): NextResponse {
+  const isApiRequest = request.nextUrl.pathname === "/api"
+    || request.nextUrl.pathname.startsWith("/api/");
+  const admin = sanitizeWebAdmin(request.nextUrl.searchParams.get("admin") || "");
+  if (admin) {
+    res.cookies.set("aoi_admin", admin, {
+      path: "/",
+      sameSite: "lax",
+      httpOnly: true,
+      maxAge: 60 * 60 * 24 * 30,
+    });
+  } else if (!isApiRequest) {
+    // Document load without ?admin= must not inherit the previous login.
+    res.cookies.set("aoi_admin", "", { path: "/", sameSite: "lax", httpOnly: true, maxAge: 0 });
+  }
+  return res;
+}
+
 function tooManyAttempts(retryAfterMs: number): NextResponse {
   return new NextResponse("Too many failed attempts", {
     status: 429,
@@ -44,7 +71,7 @@ export function proxy(request: NextRequest) {
     if (request.nextUrl.pathname === "/login") {
       return NextResponse.redirect(new URL("/", request.url));
     }
-    return NextResponse.next();
+    return withAdminCookie(request, NextResponse.next());
   }
 
   let authenticated = isValidWebSessionToken(request.cookies.get(PI_WEB_SESSION_COOKIE)?.value, password);
@@ -64,9 +91,9 @@ export function proxy(request: NextRequest) {
   if (request.nextUrl.pathname === "/login") {
     return authenticated
       ? NextResponse.redirect(new URL("/", request.url))
-      : NextResponse.next();
+      : withAdminCookie(request, NextResponse.next());
   }
-  if (request.nextUrl.pathname === "/api/web-auth") return NextResponse.next();
+  if (request.nextUrl.pathname === "/api/web-auth") return withAdminCookie(request, NextResponse.next());
 
   if (!authenticated) {
     if (!isApiRequest) {
@@ -80,12 +107,12 @@ export function proxy(request: NextRequest) {
       status: 401,
       headers: {
         "Cache-Control": "no-store",
-        "WWW-Authenticate": 'Basic realm="Pi Web", charset="UTF-8"',
+        "WWW-Authenticate": 'Basic realm="agentSMark", charset="UTF-8"',
       },
     });
   }
 
-  return NextResponse.next();
+  return withAdminCookie(request, NextResponse.next());
 }
 
 export const config = { matcher: ["/", "/login", "/api/:path*"] };

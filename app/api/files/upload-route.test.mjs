@@ -7,23 +7,22 @@ import { createJiti } from "jiti";
 
 const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-upload-route-")));
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-const previousRoots = globalThis.__piAllowedRootsCache;
 process.env.PI_CODING_AGENT_DIR = path.join(base, "agent");
 test.after(() => {
   if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-  globalThis.__piAllowedRootsCache = previousRoots;
   fs.rmSync(base, { recursive: true, force: true });
 });
 
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true });
 const { POST } = await jiti.import("./[...path]/route.ts");
 const { encodeFilePathForApi } = await jiti.import("../../../lib/file-paths.ts");
+const { allowFileRoot } = await jiti.import("../../../lib/file-access.ts");
 const { NextRequest } = await jiti.import("next/server");
 
 function fixture() {
   const directory = fs.mkdtempSync(path.join(base, "files-"));
-  globalThis.__piAllowedRootsCache = { roots: new Set([directory]), expiresAt: Date.now() + 60_000 };
+  allowFileRoot(directory);
   const destination = path.join(directory, "important.txt");
   fs.writeFileSync(destination, "original contents");
   return { directory, destination };

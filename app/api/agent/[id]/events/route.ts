@@ -1,13 +1,21 @@
 import { createAgentEventStream } from "@/lib/agent-event-stream";
 import { resolveSessionPath } from "@/lib/session-reader";
 import { getRpcSession, startRpcSession } from "@/lib/rpc-manager";
+import { withWebAdmin } from "@/lib/web-admin-scope";
 
 export const dynamic = "force-dynamic";
 
 // GET /api/agent/[id]/events - SSE stream of agent events
 export async function GET(
   req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withWebAdmin(req, () => getEvents(req, ctx));
+}
+
+async function getEvents(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   if (req.signal.aborted) return new Response(null, { status: 204 });

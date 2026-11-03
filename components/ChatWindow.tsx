@@ -1,6 +1,5 @@
 "use client";
 import { registerAbortHandler } from "@/hooks/useKeyboardShortcuts";
-import Image from "next/image";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, BlockingExtensionUiRequest, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolResultMessage } from "@/lib/types";
@@ -18,6 +17,7 @@ import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
 import { AnsiText } from "./AnsiText";
 import { useI18n } from "@/hooks/useI18n";
+import { PRODUCT_DISPLAY_NAME } from "@/lib/product";
 import { phaseLabel } from "@/lib/chat-phase-label";
 import { useAgentSession, type NoticeItem } from "@/hooks/useAgentSession";
 import { useDragDrop } from "@/hooks/useDragDrop";
@@ -289,6 +289,9 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     deferInitialScroll: Boolean(pendingScrollRestore),
   });
   const sessionBusy = agentRunning || bashRunning;
+  const contextPercent = typeof contextUsage?.percent === "number" && Number.isFinite(contextUsage.percent)
+    ? (contextUsage.percent <= 1 ? contextUsage.percent * 100 : contextUsage.percent)
+    : null;
   const [quotedSelection, setQuotedSelection] = useState<{
     text: string;
     top: number;
@@ -1243,9 +1246,19 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
               <MessageView message={streamState.streamingMessage as AgentMessage} toolResults={toolResultsMap} isStreaming modelNames={modelNames} cwd={messageCwd} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
             )}
 
-            {agentRunning && !hasStreamingContent && (agentPhase || isCompacting) && (
+            {agentRunning && !hasStreamingContent && (agentPhase || isCompacting) && !bashRunning && (
               <div className="break-words py-2 text-[13px] text-text-muted">
-                <span className="animate-[pulse_1.5s_infinite]">{phaseLabel(agentPhase, t, isCompacting)}</span>
+                <span className="animate-[pulse_1.5s_infinite]">{phaseLabel(agentPhase, t, {
+                  isCompacting,
+                  llamaDown: Boolean(modelError),
+                  contextPercent,
+                })}</span>
+              </div>
+            )}
+
+            {!agentRunning && contextPercent != null && contextPercent >= 25 && (
+              <div className="break-words py-2 text-[13px] text-text-muted">
+                {t("chat.stickyContextHint", { percent: Math.round(contextPercent) })}
               </div>
             )}
 
@@ -1395,8 +1408,26 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
           <div className="mb-3 w-full" style={{ paddingLeft: 16, paddingRight: isMobile ? 16 : 52 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto", fontFamily: "var(--font-mono)" }}>
               <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 7 : 10, minWidth: 0, flex: 1, lineHeight: 1.4, overflow: "hidden" }}>
-                <Image src="/icons/apple-touch-icon.png" width={32} height={32} alt="" priority style={{ flexShrink: 0 }} />
-                <span style={{ fontSize: 22, color: "var(--text)", fontWeight: 700, flexShrink: 0, whiteSpace: "nowrap" }}>Pi Web</span>
+                <span
+                  aria-hidden
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: "50%",
+                    background: "#4A7C59",
+                    color: "#fff",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontWeight: 700,
+                    fontSize: 16,
+                    flexShrink: 0,
+                    fontFamily: "system-ui, sans-serif",
+                  }}
+                >
+                  A
+                </span>
+                <span style={{ fontSize: 22, color: "var(--text)", fontWeight: 700, flexShrink: 0, whiteSpace: "nowrap" }}>{PRODUCT_DISPLAY_NAME}</span>
                 <NewSessionUpdateLink label={(version) => t("appUpdate.releaseNotes", { version })} />
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
@@ -1404,7 +1435,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                   web <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_APP_VERSION ?? "0.0.0"}</span>
                 </span>
                 <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  pi <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_PI_VERSION ?? "0.0.0"}</span>
+                  engine <span style={{ color: "var(--text)" }}>v{process.env.NEXT_PUBLIC_PI_VERSION ?? "0.0.0"}</span>
                 </span>
               </div>
             </div>

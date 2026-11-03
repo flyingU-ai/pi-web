@@ -35,7 +35,7 @@ test("explicit context changes invalidate a pending workspace restore", () => {
 test("all active-session transitions share one persistence effect", () => {
   assert.match(
     source,
-    /useEffect\(\(\) => \{\s+if \(selectedSession\) \{[\s\S]*?setLastOpenSession\(projectKey, selectedSession\.id\);\s+setTabOpenSession\(selectedSession\.id\);\s+return;\s+\}\s+if \(newSessionCwd\) setTabOpenNewSession\(newSessionCwd\);\s+\}, \[newSessionCwd, selectedSession\]\);/,
+    /useEffect\(\(\) => \{\s+if \(selectedSession\) \{[\s\S]*?setLastOpenSession\(scopedWorkspaceKey\(projectKey, adminFromSearch\(\)\), selectedSession\.id\);\s+setTabOpenSession\(selectedSession\.id\);\s+return;\s+\}\s+if \(newSessionCwd\) setTabOpenNewSession\(newSessionCwd\);\s+\}, \[newSessionCwd, selectedSession\]\);/,
   );
 });
 
@@ -81,6 +81,8 @@ test("New restores the draft after session navigation and workspace auto-restore
         fetch: () => response.promise,
         getLastOpenSession: (key) => key === cwd ? session.id : null,
         clearLastOpen() {},
+        scopedWorkspaceKey: (key, admin) => (admin ? `${admin}::${key}` : key),
+        adminFromSearch: () => "",
         workspaceKeyOf: (value) => value.projectKey ?? value.cwd,
         useCallback: (callback) => callback,
         useGlobalKeyboardShortcuts() {},

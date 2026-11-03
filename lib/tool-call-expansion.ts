@@ -23,3 +23,14 @@ export function setToolCallExpanded(toolCallId: string | undefined, expanded: bo
 export function clearExpandedToolCalls(): void {
   expandedToolCalls.clear();
 }
+
+/** page_accept / page-*.png|json must stay open so the user sees what the agent read. */
+export function isPageReceiptTool(block: {
+  toolName?: string;
+  input?: unknown;
+  arguments?: unknown;
+}): boolean {
+  const blob = `${block.toolName || ""}\n${JSON.stringify(block.input ?? block.arguments ?? {})}`;
+  return /\bpage_accept\.mjs\b/.test(blob)
+    || /page-(?:distribution|benchmark)\.(?:png|json)/.test(blob);
+}

@@ -3,8 +3,16 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { generateSessionTitle } from "@/lib/session-title";
 import { getRpcSession, startRpcSession } from "@/lib/rpc-manager";
 import { invalidateSessionListCache, resolveSessionPath } from "@/lib/session-reader";
+import { withWebAdmin } from "@/lib/web-admin-scope";
 
 export async function POST(
+  req: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withWebAdmin(req, () => autoName(req, ctx));
+}
+
+async function autoName(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {

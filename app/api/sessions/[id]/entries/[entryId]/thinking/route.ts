@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import { getSessionEntries, resolveSessionPath } from "@/lib/session-reader";
+import { withWebAdmin } from "@/lib/web-admin-scope";
 
 export async function GET(
+  req: Request,
+  ctx: { params: Promise<{ id: string; entryId: string }> },
+) {
+  return withWebAdmin(req, () => getThinking(req, ctx));
+}
+
+async function getThinking(
   req: Request,
   { params }: { params: Promise<{ id: string; entryId: string }> },
 ) {

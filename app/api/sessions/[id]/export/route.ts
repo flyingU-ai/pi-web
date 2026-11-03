@@ -7,6 +7,7 @@ import { promisify } from "util";
 import { fileURLToPath, pathToFileURL } from "url";
 import { NextResponse } from "next/server";
 import { resolveSessionPath } from "@/lib/session-reader";
+import { withWebAdmin } from "@/lib/web-admin-scope";
 
 const execFileAsync = promisify(execFile);
 
@@ -240,7 +241,14 @@ async function exportSession(filePath: string, outputPath: string): Promise<void
 
 export async function GET(
   req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withWebAdmin(req, () => handleExportGet(req, ctx));
+}
+
+async function handleExportGet(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   const inline = new URL(req.url).searchParams.get("inline") === "1";

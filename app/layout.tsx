@@ -1,21 +1,15 @@
 import type { Metadata, Viewport } from "next";
-import { Noto_Sans_Mono } from "next/font/google";
 import { PwaRegistration } from "@/components/PwaRegistration";
 import { THEME_INIT_SCRIPT } from "@/lib/theme";
+import { PRODUCT_DISPLAY_NAME } from "@/lib/product";
 import "katex/dist/katex.min.css";
 import "./globals.css";
 import "./settings.css";
 
-const notoSansMono = Noto_Sans_Mono({
-  subsets: ["latin", "cyrillic"],
-  variable: "--font-noto-mono",
-  display: "swap",
-});
-
 export const metadata: Metadata = {
-  title: "Pi Web",
-  description: "Pi Web interface for the pi coding agent",
-  applicationName: "Pi Web",
+  title: PRODUCT_DISPLAY_NAME,
+  description: `${PRODUCT_DISPLAY_NAME} assistant`,
+  applicationName: PRODUCT_DISPLAY_NAME,
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
@@ -36,7 +30,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Pi Web",
+    title: PRODUCT_DISPLAY_NAME,
   },
   formatDetection: {
     telephone: false,
@@ -60,7 +54,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" translate="no" className={`${notoSansMono.variable} notranslate`} suppressHydrationWarning>
+    <html lang="en" translate="no" className="notranslate" suppressHydrationWarning>
       <head>
         <meta name="google" content="notranslate" />
         <script

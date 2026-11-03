@@ -8,13 +8,21 @@ import {
   resolveBashOutputPath,
 } from "@/lib/bash-output";
 import { isBashOutputPathReferencedBySession } from "@/lib/session-file-references";
+import { withWebAdmin } from "@/lib/web-admin-scope";
 
 // GET /api/agent/[id]/bash-output?path=<absPath>
 // Reads a bash output temp file referenced by this session. Inline display is
 // size-limited; download responses stream the file without buffering it.
 export async function GET(
+  req: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withWebAdmin(req, () => getBashOutput(req, ctx));
+}
+
+async function getBashOutput(
   _req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   let path: string | null = null;

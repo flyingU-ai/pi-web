@@ -13,10 +13,21 @@ import {
   getRunningRpcSessionIds,
 } from "@/lib/rpc-manager";
 import { startServerPerf } from "@/lib/perf";
+import { adminFromRequest, warehouseRoot, withWebAdmin } from "@/lib/web-admin-scope";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  return withWebAdmin(req, () => getSessions(req));
+}
+
+async function getSessions(req: Request) {
+  if (warehouseRoot() && !adminFromRequest(req)) {
+    return NextResponse.json(
+      { error: "admin required" },
+      { status: 401, headers: { "Cache-Control": "no-store" } },
+    );
+  }
   const perf = startServerPerf("GET /api/sessions");
   try {
     const searchParams = new URL(req.url).searchParams;

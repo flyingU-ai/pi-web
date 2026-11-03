@@ -1,8 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";
-import { adminCodeRoot, canMountVirtualCode, virtualCodeDisplayPath } from "@/lib/dual-roots";
-import { getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed, isWindowsAbsolutePath } from "@/lib/file-access";
+import { canMountVirtualCode, listVirtualCodeChildren, virtualCodeDisplayPath } from "@/lib/dual-roots";
+import { denyCrossAdminPath, getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed, isWindowsAbsolutePath } from "@/lib/file-access";
 import { getGitStatus, getGitStatusForest } from "@/lib/git-changes";
 import { isDatePoolRoot } from "@/lib/web-bash-guard";
 import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
 
     const admin = (await resolveCurrentAdminAsync()) || adminFromRequest(request);
     const allowedRoots = await getAllowedFileRoots();
-    if (!isFilePathAllowed(cwd, allowedRoots)) {
+    if (denyCrossAdminPath(cwd, admin) || !isFilePathAllowed(cwd, allowedRoots)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
@@ -34,17 +34,17 @@ export async function GET(request: NextRequest) {
     }
 
     if (isDatePoolRoot(cwd) && canMountVirtualCode(cwd, admin)) {
-      const codeRoot = adminCodeRoot(admin);
-      const extra = await getGitStatusForest(codeRoot);
+      const children = listVirtualCodeChildren(admin);
+      const parts = await Promise.all(children.map((child) => getGitStatusForest(child.path)));
       return NextResponse.json({
-        ...extra,
-        files: extra.files.map((file) => ({
+        isGitRepository: parts.some((part) => part.isGitRepository),
+        repositoryRoot: children.length ? path.join(cwd, "code") : null,
+        files: parts.flatMap((part) => part.files.map((file) => ({
           ...file,
           filePath: virtualCodeDisplayPath(file.filePath, admin),
-        })),
-        repositoryRoot: extra.repositoryRoot
-          ? path.join(cwd, "code")
-          : extra.repositoryRoot,
+        }))),
+        additions: parts.reduce((sum, part) => sum + part.additions, 0),
+        deletions: parts.reduce((sum, part) => sum + part.deletions, 0),
       });
     }
 

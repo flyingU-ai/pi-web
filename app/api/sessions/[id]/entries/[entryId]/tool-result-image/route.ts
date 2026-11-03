@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionEntries, resolveSessionPath } from "@/lib/session-reader";
 import { MAX_TOOL_RESULT_IMAGE_BYTES, TOOL_RESULT_IMAGE_MIMES } from "@/lib/tool-result-images";
+import { withWebAdmin } from "@/lib/web-admin-scope";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -42,6 +43,13 @@ function decodeBoundedBase64(data: string): Uint8Array | null {
 }
 
 export async function GET(
+  req: Request,
+  ctx: { params: Promise<{ id: string; entryId: string }> },
+) {
+  return withWebAdmin(req, () => getToolResultImage(req, ctx));
+}
+
+async function getToolResultImage(
   req: Request,
   { params }: { params: Promise<{ id: string; entryId: string }> },
 ) {

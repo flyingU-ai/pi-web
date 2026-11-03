@@ -58,19 +58,24 @@ function pathDepth(p: string): number {
  */
 export function buildEntriesFromFiles(files: string[]): FileIndexEntry[] {
   const dirs = new Set<string>();
-  for (const f of files) {
-    let idx = f.indexOf("/");
+  const filePaths: string[] = [];
+  for (const raw of files) {
+    if (!raw) continue;
+    if (raw.endsWith("/")) {
+      const dir = raw.replace(/\/+$/, "");
+      if (dir) dirs.add(dir);
+      continue;
+    }
+    filePaths.push(raw);
+    let idx = raw.indexOf("/");
     while (idx !== -1) {
-      dirs.add(f.slice(0, idx));
-      idx = f.indexOf("/", idx + 1);
+      dirs.add(raw.slice(0, idx));
+      idx = raw.indexOf("/", idx + 1);
     }
   }
   const entries: FileIndexEntry[] = [];
   for (const d of dirs) entries.push({ path: d, isDir: true });
-  for (const f of files) {
-    if (!f) continue;
-    entries.push({ path: f, isDir: false });
-  }
+  for (const f of filePaths) entries.push({ path: f, isDir: false });
   entries.sort((a, b) => pathDepth(a.path) - pathDepth(b.path) || a.path.localeCompare(b.path));
   return entries;
 }

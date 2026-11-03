@@ -182,9 +182,9 @@ test("only the session-mount load probes disk for external appends", () => {
   assert.match(loadSessionSource, /options\?: \{ force\?: boolean \}/);
   assert.match(loadSessionSource, /if \(options\?\.force\) params\.set\("force", "1"\)/);
   assert.match(loadSessionSource, /d\.wrapperRebuilt[\s\S]*?eventConnectionRef\.current\?\.close\(\)[\s\S]*?maintain\(sid\)/);
-  assert.match(mountSource, /loadSession\(session\.id, !cached, true, \{ force: true \}\)/);
+  assert.match(mountSource, /loadSession\(session\.id, !cached, true, \{ force: !cached \}\)/);
   assert.match(source, /await loadSession\(sid\)/);
-  assert.equal([...source.matchAll(/\{ force: true \}/g)].length, 1);
+  assert.equal([...source.matchAll(/\{ force: true \}/g)].length, 0);
 });
 
 test("forking stays available during a run while in-session branch switches wait for it", () => {
@@ -375,10 +375,12 @@ test("delegates event stream readiness and hides an empty agent phase", () => {
   assert.match(ensureSource, /eventConnectionRef\.current!\.maintain\(sid\)/);
   assert.match(chatWindowSource, /const hasStreamingContent = Boolean\(streamState\.streamingMessage\?\.content\.length\)/);
   assert.match(chatWindowSource, /streamState\.isStreaming && hasStreamingContent && streamState\.streamingMessage/);
-  assert.match(chatWindowSource, /agentRunning && !hasStreamingContent && \(agentPhase \|\| isCompacting\)/);
+  assert.match(chatWindowSource, /agentRunning && !hasStreamingContent && \(agentPhase \|\| isCompacting\) && !bashRunning/);
   // Compaction is what the user needs to know while a turn is being compacted, so it is
   // forwarded to the label instead of letting the stream phase read as a hang.
-  assert.match(chatWindowSource, /phaseLabel\(agentPhase, t, isCompacting\)/);
+  assert.match(chatWindowSource, /phaseLabel\(agentPhase, t, \{/);
+  assert.match(chatWindowSource, /llamaDown: Boolean\(modelError\)/);
+  assert.match(chatWindowSource, /chat\.stickyContextHint/);
   assert.match(phaseLabelSource, /return null;/);
 });
 

@@ -43,5 +43,13 @@ export function getRelativeFilePath(filePath: string, cwd?: string): string {
 }
 
 export function joinFilePath(parent: string, child: string): string {
-  return `${normalizeFilePathSlashes(parent).replace(/\/$/, "")}/${child}`;
+  return `${normalizeFilePathSlashes(parent).replace(/\/+$/, "")}/${child}`;
+}
+
+/** Upload into the selected folder when it sits under cwd; otherwise cwd. */
+export function uploadDirFromSelection(cwd: string, selectedDir?: string | null): string {
+  const root = normalizeFilePathSlashes(cwd).replace(/\/+$/, "");
+  const selected = selectedDir ? normalizeFilePathSlashes(selectedDir).replace(/\/+$/, "") : "";
+  if (selected && (selected === root || selected.startsWith(`${root}/`))) return selected;
+  return root;
 }

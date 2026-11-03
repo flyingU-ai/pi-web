@@ -42,6 +42,14 @@ function readMap(storage: StorageLike): Record<string, string | undefined> {
   }
 }
 
+/** Remember last session per admin+workspace so two logins do not steal each other's id. */
+export function scopedWorkspaceKey(workspaceKey: string, admin?: string): string {
+  const a = String(admin || "").trim();
+  const key = String(workspaceKey || "").trim();
+  if (!key) return a;
+  return a ? `${a}::${key}` : key;
+}
+
 /** The remembered session id for a workspace, or null when none/stale. */
 export function getLastOpenSession(
   workspaceKey: string,

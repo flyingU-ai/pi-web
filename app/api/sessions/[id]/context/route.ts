@@ -1,8 +1,16 @@
 import { NextResponse } from "next/server";
 import { resolveSessionPath, openSessionManager, buildSessionContext } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
+import { withWebAdmin } from "@/lib/web-admin-scope";
 
 export async function GET(
+  req: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  return withWebAdmin(req, () => getContext(req, ctx));
+}
+
+async function getContext(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {

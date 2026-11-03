@@ -8,17 +8,14 @@ import { createJiti } from "jiti";
 
 const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-git-diff-route-")));
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-const previousRootsCache = globalThis.__piAllowedRootsCache;
-const previousAdditionalRoots = globalThis.__piAdditionalAllowedRoots;
-delete globalThis.__piAllowedRootsCache;
-delete globalThis.__piAdditionalAllowedRoots;
+const previousAdditionalRoots = globalThis.__piAdditionalAllowedRootsByAdmin;
+delete globalThis.__piAdditionalAllowedRootsByAdmin;
 process.env.PI_CODING_AGENT_DIR = path.join(base, "agent");
 fs.mkdirSync(process.env.PI_CODING_AGENT_DIR);
 test.after(() => {
   if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-  globalThis.__piAllowedRootsCache = previousRootsCache;
-  globalThis.__piAdditionalAllowedRoots = previousAdditionalRoots;
+  globalThis.__piAdditionalAllowedRootsByAdmin = previousAdditionalRoots;
   fs.rmSync(base, { recursive: true, force: true });
 });
 

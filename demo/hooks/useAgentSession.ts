@@ -2230,7 +2230,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setError(null);
         setLoading(false);
       }
-      loadSession(session.id, !cached, true, { force: true }).then((loadedAgentState) => {
+      loadSession(session.id, !cached, true, { force: !cached }).then((loadedAgentState) => {
         const agentState = loadedAgentState as { running: boolean; state?: AgentStateResponse } | null;
         if (agentState?.running) {
           loadTools(session.id);

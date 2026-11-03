@@ -50,6 +50,9 @@ declare global {
 	var __piWebScanIndex: Map<string, IndexEntry> | undefined;
 	var __piWebScanIndexLoaded: boolean | undefined;
 	var __piWebScanIndexSaveQueued: boolean | undefined;
+	var __piWebScanIndexByDir: Map<string, Map<string, IndexEntry>> | undefined;
+	var __piWebScanIndexLoadedDirs: Set<string> | undefined;
+	var __piWebScanIndexSaveQueuedDirs: Set<string> | undefined;
 }
 
 function parseLine(line: string): RawEntry | null {
@@ -244,19 +247,24 @@ export async function scanSessionFileInfo(
 }
 
 async function enumerateSessionFiles(sessionsDir: string): Promise<string[]> {
-	let dirs: Dirent[];
+	let entries: Dirent[];
 	try {
-		const entries = await readdir(sessionsDir, { withFileTypes: true });
-		dirs = entries.filter(
-			(entry) => entry.isDirectory() || entry.isSymbolicLink(),
-		);
+		entries = await readdir(sessionsDir, { withFileTypes: true });
 	} catch {
 		return [];
 	}
 
 	const files: string[] = [];
-	for (const dir of dirs) {
-		const dirPath = join(sessionsDir, dir.name);
+	for (const entry of entries) {
+		// Admin leaf SessionManager.create writes jsonl in the leaf root
+		// (`sessions/<admin>/pi/*.jsonl`). Native Pi still uses one encoded-cwd
+		// folder. List both; do not recurse into `sessions/<encoded>/`.
+		if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+			files.push(join(sessionsDir, entry.name));
+			continue;
+		}
+		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+		const dirPath = join(sessionsDir, entry.name);
 		try {
 			for (const f of await readdir(dirPath)) {
 				if (f.endsWith(".jsonl")) files.push(join(dirPath, f));
@@ -283,24 +291,40 @@ async function runPool<T>(items: T[], worker: (item: T) => Promise<void>) {
 	}
 }
 
-function getIndex(): Map<string, IndexEntry> {
-	if (!globalThis.__piWebScanIndex) globalThis.__piWebScanIndex = new Map();
-	return globalThis.__piWebScanIndex;
+function getIndex(sessionsDir = "", isolated = false): Map<string, IndexEntry> {
+	if (!isolated) {
+		if (!globalThis.__piWebScanIndex) globalThis.__piWebScanIndex = new Map();
+		return globalThis.__piWebScanIndex;
+	}
+	if (!globalThis.__piWebScanIndexByDir) globalThis.__piWebScanIndexByDir = new Map();
+	let idx = globalThis.__piWebScanIndexByDir.get(sessionsDir);
+	if (!idx) {
+		idx = new Map();
+		globalThis.__piWebScanIndexByDir.set(sessionsDir, idx);
+	}
+	return idx;
 }
 
-function indexFilePath(): string {
-	return join(getAgentDir(), "pi-web-session-index.json");
+function indexFilePath(sessionsDir = "", isolated = false): string {
+	if (!isolated) return join(getAgentDir(), "pi-web-session-index.json");
+	return join(sessionsDir, ".pi-web-scan-index.json");
 }
 
-function loadPersistedIndex(): void {
-	if (globalThis.__piWebScanIndexLoaded) return;
-	globalThis.__piWebScanIndexLoaded = true;
-	const path = indexFilePath();
+function loadPersistedIndex(sessionsDir = "", isolated = false): void {
+	if (!isolated) {
+		if (globalThis.__piWebScanIndexLoaded) return;
+		globalThis.__piWebScanIndexLoaded = true;
+	} else {
+		if (!globalThis.__piWebScanIndexLoadedDirs) globalThis.__piWebScanIndexLoadedDirs = new Set();
+		if (globalThis.__piWebScanIndexLoadedDirs.has(sessionsDir)) return;
+		globalThis.__piWebScanIndexLoadedDirs.add(sessionsDir);
+	}
+	const path = indexFilePath(sessionsDir, isolated);
 	if (!existsSync(path)) return;
 	try {
 		const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
 		if (!isRecord(parsed) || parsed.version !== INDEX_FORMAT_VERSION || !isRecord(parsed.entries)) return;
-		const index = getIndex();
+		const index = getIndex(sessionsDir, isolated);
 		for (const [pathKey, entry] of Object.entries(parsed.entries)) {
 			if (!isRecord(entry) || !isRecord(entry.fp) || !isRecord(entry.info)) continue;
 			const { fp, info } = entry;
@@ -339,16 +363,23 @@ function loadPersistedIndex(): void {
 	}
 }
 
-function queueIndexPersist(): void {
-	if (globalThis.__piWebScanIndexSaveQueued) return;
-	globalThis.__piWebScanIndexSaveQueued = true;
+function queueIndexPersist(sessionsDir = "", isolated = false): void {
+	if (!isolated) {
+		if (globalThis.__piWebScanIndexSaveQueued) return;
+		globalThis.__piWebScanIndexSaveQueued = true;
+	} else {
+		if (!globalThis.__piWebScanIndexSaveQueuedDirs) globalThis.__piWebScanIndexSaveQueuedDirs = new Set();
+		if (globalThis.__piWebScanIndexSaveQueuedDirs.has(sessionsDir)) return;
+		globalThis.__piWebScanIndexSaveQueuedDirs.add(sessionsDir);
+	}
 	queueMicrotask(() => {
-		globalThis.__piWebScanIndexSaveQueued = undefined;
+		if (!isolated) globalThis.__piWebScanIndexSaveQueued = undefined;
+		else globalThis.__piWebScanIndexSaveQueuedDirs?.delete(sessionsDir);
 		try {
 			const entries: Record<string, IndexEntry> = {};
-			for (const [pathKey, entry] of getIndex()) entries[pathKey] = entry;
+			for (const [pathKey, entry] of getIndex(sessionsDir, isolated)) entries[pathKey] = entry;
 			writePrivateFileAtomicSync(
-				indexFilePath(),
+				indexFilePath(sessionsDir, isolated),
 				JSON.stringify({ version: INDEX_FORMAT_VERSION, entries }),
 			);
 		} catch {
@@ -363,15 +394,16 @@ function queueIndexPersist(): void {
  * catalogue (modified descending).
  */
 export async function listSessionsIncremental(
-	options: { deferDetails?: boolean } = {},
+	options: { deferDetails?: boolean; sessionsDir?: string } = {},
 ): Promise<ScannedSessionInfo[]> {
-	loadPersistedIndex();
+	const isolated = Boolean(options.sessionsDir);
+	const sessionsDir = options.sessionsDir || join(getAgentDir(), "sessions");
+	loadPersistedIndex(sessionsDir, isolated);
 	const deferDetails = options.deferDetails ?? false;
 
-	const sessionsDir = join(getAgentDir(), "sessions");
 	const files = await enumerateSessionFiles(sessionsDir);
 
-	const index = getIndex();
+	const index = getIndex(sessionsDir, isolated);
 	const present = new Set(files);
 	const stale: string[] = [];
 	for (const known of index.keys()) {
@@ -432,7 +464,7 @@ export async function listSessionsIncremental(
 		}
 	});
 
-	if (changed.length > 0 || stale.length > 0) queueIndexPersist();
+	if (changed.length > 0 || stale.length > 0) queueIndexPersist(sessionsDir, isolated);
 
 	// Preserve catalogue order for timestamp ties, independently of cache hits
 	// and the order in which concurrent file reads complete. Since pi 0.86 the
@@ -454,4 +486,7 @@ export function resetSessionScanIndexForTests(): void {
 	globalThis.__piWebScanIndex = undefined;
 	globalThis.__piWebScanIndexLoaded = undefined;
 	globalThis.__piWebScanIndexSaveQueued = undefined;
+	globalThis.__piWebScanIndexByDir = undefined;
+	globalThis.__piWebScanIndexLoadedDirs = undefined;
+	globalThis.__piWebScanIndexSaveQueuedDirs = undefined;
 }

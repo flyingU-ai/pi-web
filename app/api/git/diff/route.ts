@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { lstatSync } from "fs";
 import path from "path";
 import { gitCwdForPath, resolveDualRootPath } from "@/lib/dual-roots";
-import { getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed, isWindowsAbsolutePath } from "@/lib/file-access";
+import { denyCrossAdminPath, getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed, isWindowsAbsolutePath } from "@/lib/file-access";
 import { getGitFileDiff } from "@/lib/git-changes";
 import { hasParentDirectorySegment } from "@/lib/path-security";
 import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
@@ -41,6 +41,9 @@ export async function GET(request: NextRequest) {
     const gitCwd = gitCwdForPath(filePath || cwd, admin);
     const gitPath = resolveDualRootPath(filePath, admin);
     const allowedRoots = await getAllowedFileRoots();
+    if (denyCrossAdminPath(cwd, admin) || denyCrossAdminPath(filePath, admin) || denyCrossAdminPath(gitPath, admin)) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
     if (!isFilePathAllowed(cwd, allowedRoots) || !isFilePathAllowed(filePath, allowedRoots)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
@@ -49,7 +52,7 @@ export async function GET(request: NextRequest) {
     }
     // Check the target as well as cwd: a directory junction inside a repository
     // can otherwise expose an outside file through an apparently local path.
-    if (!isExistingFilePathAllowed(gitCwd, allowedRoots) || !isDiffPathAllowed(gitPath, allowedRoots)) {
+    if (!isDiffPathAllowed(gitCwd, allowedRoots) || !isDiffPathAllowed(gitPath, allowedRoots)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
