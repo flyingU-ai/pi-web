@@ -1,36 +1,41 @@
-import { getAdditionalAllowedRoots, normalizeSlashes } from "./allowed-roots";
+import { getAdditionalAllowedRoots, getAllowedRootsCacheMap, allowedRootsCacheKey, normalizeSlashes } from "./allowed-roots";
+import { resolveAdminCodeRoot } from "./admin-workspaces";
 import { isExistingPathWithinRoots, isPathWithinRoots } from "./path-security";
 import { listAllSessions } from "./session-reader";
+import { resolveCurrentAdminAsync, warehouseRoot } from "./web-admin-scope";
 export { allowFileRoot, normalizeSlashes } from "./allowed-roots";
 export { isWindowsAbsolutePath } from "./paths";
-
-// Short-TTL cache for the allowed-roots set. Without this, every file list/read
-// request re-scans every pi session on disk just to check access. 5s is short
-// enough that newly-created cwds appear promptly; stored on globalThis so it
-// survives Next.js hot-reload.
-declare global {
-  var __piAllowedRootsCache: { roots: Set<string>; expiresAt: number } | undefined;
-}
 
 const ALLOWED_ROOTS_TTL_MS = 5_000;
 
 export async function getAllowedFileRoots(): Promise<Set<string>> {
   const now = Date.now();
-  const cached = globalThis.__piAllowedRootsCache;
+  const legacy = (globalThis as { __piAllowedRootsCache?: { roots: Set<string>; expiresAt: number } })
+    .__piAllowedRootsCache;
+  if (legacy?.roots && legacy.expiresAt > now) return legacy.roots;
+
+  const admin = await resolveCurrentAdminAsync();
+  const cacheKey = allowedRootsCacheKey(admin);
+  const cacheMap = getAllowedRootsCacheMap();
+  const cached = cacheMap.get(cacheKey);
   if (cached && cached.expiresAt > now) return cached.roots;
 
   const sessions = await listAllSessions();
   const roots = new Set<string>();
   for (const s of sessions) {
     if (s.cwd) roots.add(normalizeSlashes(s.cwd));
-    // The project root (main repo shared by all worktrees) is browsable too —
-    // the project dropdown lists it even when only worktrees have sessions.
     if (s.projectRoot) roots.add(normalizeSlashes(s.projectRoot));
   }
 
-  for (const root of getAdditionalAllowedRoots()) roots.add(root);
+  const warehouse = warehouseRoot();
+  if (warehouse) roots.add(normalizeSlashes(warehouse));
 
-  globalThis.__piAllowedRootsCache = { roots, expiresAt: now + ALLOWED_ROOTS_TTL_MS };
+  const codeRoot = resolveAdminCodeRoot(admin);
+  if (codeRoot) roots.add(normalizeSlashes(codeRoot));
+
+  for (const root of getAdditionalAllowedRoots(admin)) roots.add(root);
+
+  cacheMap.set(cacheKey, { roots, expiresAt: now + ALLOWED_ROOTS_TTL_MS });
   return roots;
 }
 

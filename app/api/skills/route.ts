@@ -38,6 +38,10 @@ async function getSkillEditRoots(): Promise<Set<string>> {
   // too (the SDK always treats ~/.agents/skills as trusted).
   const globalSkillsDir = path.join(homedir(), ".agents", "skills");
   if (existsSync(globalSkillsDir)) allowedRoots.add(globalSkillsDir);
+  // Shared evolution home: leaf skills/ is a symlink to ~/.pi/agent/skills.
+  const sharedHome = String(process.env.PI_SHARED_AGENT_HOME || "").trim()
+    || path.join(homedir(), ".pi", "agent");
+  if (sharedHome) allowedRoots.add(sharedHome);
   return allowedRoots;
 }
 
