@@ -8,11 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import {
-  BASH_IDLE_SECONDS,
-  BASH_START_GRACE_SECONDS,
   BASH_WALL_FALLBACK_SECONDS,
-  bashDeniedResult,
-  denyBashCommand,
   isWalkLikeCommand,
   resolveBashTimeout,
 } from "./web-bash-guard";
@@ -86,8 +82,8 @@ export function createProjectCommandBashOperations(
     abortSettleGraceMs = ABORT_SETTLE_GRACE_MS,
     agentBinDir = join(getAgentDir(), "bin"),
     baseEnvironment = process.env,
-    idleSeconds = BASH_IDLE_SECONDS,
-    startGraceSeconds = BASH_START_GRACE_SECONDS,
+    idleSeconds = 0,
+    startGraceSeconds = 0,
     localOperations = createLocalBashOperations({ shellPath: options.shellPath }),
     platform = process.platform,
   } = options;
@@ -197,8 +193,6 @@ export function createProjectCommandBashExtension(options: {
         ...displayDefinition,
         async execute(toolCallId, params, signal, onUpdate, context) {
           const command = String((params as { command?: string })?.command || "");
-          const denied = denyBashCommand(command, options.cwd);
-          if (denied) return bashDeniedResult(denied);
           const executionDefinition = createBashToolDefinition(options.cwd, {
             commandPrefix: options.settings.getShellCommandPrefix(),
             operations: createProjectCommandBashOperations({

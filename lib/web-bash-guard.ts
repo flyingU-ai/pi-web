@@ -4,7 +4,7 @@ import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { resolve as resolvePath } from "node:path";
 
 export const FLEET_SLOT_CTX = 131072;
-export const FLEET_MAX_TOKENS = 65536;
+export const FLEET_MAX_TOKENS = 16384;
 /** Stall fuse: no stdout/stderr after first byte. Not a work-quota wall. */
 export const BASH_IDLE_SECONDS = 120;
 /** First-byte grace. Silent start is not idle until this elapses. */
