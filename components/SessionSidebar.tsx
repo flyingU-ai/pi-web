@@ -18,6 +18,7 @@ import { DismissButton } from "./DismissButton";
 import { getRelativeFilePath } from "@/lib/file-paths";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { SessionSearch } from "./SessionSearch";
+import { messageForApiFailure } from "@/lib/admin-session-error";
 
 // Fixed row height for the session list. SessionItem renders at exactly this
 // height, so the list can be windowed (only the visible slice is mounted).
@@ -539,7 +540,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       const res = await fetch(sessionListUrl(summary, force), {
         cache: "no-store",
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        throw new Error(res.status === 401 ? t("sidebar.adminRequired") : await messageForApiFailure(res));
+      }
       const data = await res.json() as {
         sessions: SessionInfo[];
         sessionListVersion: number;
@@ -575,7 +578,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     } finally {
       if (loadId === sessionLoadIdRef.current) setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   const initialLoadDone = useRef(false);
   useEffect(() => {

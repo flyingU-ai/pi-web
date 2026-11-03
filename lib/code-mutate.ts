@@ -2,7 +2,8 @@
 
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { adminWritableRoots, isVirtualCodeMount, resolveDualRootPath, VIRTUAL_CODE_HOME } from "./dual-roots";
+import { adminCodeHome, adminCodeZone, allAdminCodeRoots, extraMountsFor } from "./admin-workspaces";
+import { isVirtualCodeMount, resolveDualRootPath, VIRTUAL_CODE_HOME } from "./dual-roots";
 import { denyCrossAdminPath, getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed } from "./file-access";
 import { hasParentDirectorySegment } from "./path-security";
 
@@ -19,15 +20,22 @@ export function sanitizeEntryName(name: string): string | null {
   return trimmed;
 }
 
-export function isInsideCodeRoot(target: string, admin: string, allowRoot = false): boolean {
+function pathEqualsOrUnder(target: string, root: string, allowRoot: boolean): boolean {
+  if (!root) return false;
   const abs = resolve(target);
-  for (const root of adminWritableRoots(admin)) {
-    const base = resolve(root);
-    if (abs === base) {
-      if (allowRoot) return true;
-      continue;
-    }
-    if (abs.startsWith(base + sep)) return true;
+  const base = resolve(root);
+  if (abs === base) return allowRoot;
+  return abs.startsWith(base + sep);
+}
+
+export function isInsideCodeRoot(target: string, admin: string, allowRoot = false): boolean {
+  const home = adminCodeHome(admin);
+  if (pathEqualsOrUnder(target, home, allowRoot)) return true;
+  const zone = adminCodeZone(admin);
+  if (allowRoot && zone && resolve(target) === resolve(zone)) return true;
+  for (const mount of extraMountsFor(admin)) {
+    if (pathEqualsOrUnder(target, mount.path, allowRoot)) return true;
+    if (zone && pathEqualsOrUnder(target, join(zone, mount.name), allowRoot)) return true;
   }
   return false;
 }
@@ -55,7 +63,7 @@ async function authorize(
     return { ok: false, status: 403, error: "Only the private code zone can be edited" };
   }
   const roots = await getAllowedFileRoots();
-  for (const root of adminWritableRoots(admin)) roots.add(root);
+  for (const root of allAdminCodeRoots(admin)) roots.add(root);
   if (!isFilePathAllowed(resolved, roots)) {
     return { ok: false, status: 403, error: "Access denied" };
   }

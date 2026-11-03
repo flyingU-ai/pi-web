@@ -50,6 +50,11 @@ function adminFromSearch(): string {
   if (typeof window === "undefined") return "";
   return String(new URLSearchParams(window.location.search).get("admin") || "").trim();
 }
+
+function currentLabSearch(): string {
+  if (typeof window === "undefined") return "";
+  return window.location.search;
+}
 import {
   getDefaultRightPanelWidth,
   getRightPanelMaxWidth,
@@ -69,6 +74,7 @@ import type { FileViewerState } from "@/lib/file-viewer-state";
 import type { ToolEntry } from "@/lib/tool-presets";
 import { getSessionFamily } from "@/lib/session-family";
 import { getLastSettingsSection, settingsSectionRequiresProject, type SettingsSection } from "@/lib/settings-navigation";
+import { buildLabSearch } from "@/lib/lab-query";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 type AutoNameStatus =
@@ -269,6 +275,7 @@ export function AppShell() {
   }, [reclampRightPanelWidth, reclampSidebarWidth, rightPanelOpen]);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const [pendingQuotePrompt, setPendingQuotePrompt] = useState<{ sessionId: string; text: string } | null>(null);
+  const [pendingFreshPrompt, setPendingFreshPrompt] = useState<string | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
   const mobileToolbarRef = useRef<HTMLDivElement>(null);
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
@@ -611,7 +618,7 @@ export function AppShell() {
       setNewSessionCwd(cwd);
       setInitialCwdStatus("ready");
       if (!new URLSearchParams(window.location.search).get("cwd")) {
-        router.replace(`?cwd=${encodeURIComponent(cwd)}`, { scroll: false });
+        router.replace(buildLabSearch(currentLabSearch(), { cwd, session: null }), { scroll: false });
       }
     };
 
@@ -682,7 +689,7 @@ export function AppShell() {
       setSelectedSession(s);
       setSessionKey((k) => k + 1);
       if (new URLSearchParams(window.location.search).get("session") !== s.id) {
-        router.replace(`?session=${encodeURIComponent(s.id)}`, { scroll: false });
+        router.replace(buildLabSearch(currentLabSearch(), { session: s.id, cwd: null }), { scroll: false });
       }
     };
     // Fast path: the sidebar already delivered the catalogue — restore
@@ -770,7 +777,7 @@ export function AppShell() {
       // the default welcome page when none is remembered.
       restoreWorkspaceContext(newProject, cwd);
     }
-    router.replace(typeof window !== "undefined" ? window.location.pathname : "/", { scroll: false });
+    router.replace(buildLabSearch(currentLabSearch(), { cwd, session: null }) || (typeof window !== "undefined" ? window.location.pathname : "/"), { scroll: false });
   }, [activeCwd, activeFileTabId, invalidateWorkspaceRestore, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
 
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false, entryId?: string, blockIndex?: number) => {
@@ -828,7 +835,7 @@ export function AppShell() {
     // Tab-memory restore lands on `/` and must write `?session=` so reload
     // and copy-link keep this session.
     if (!isRestore || new URLSearchParams(window.location.search).get("session") !== session.id) {
-      router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
+      router.replace(buildLabSearch(currentLabSearch(), { session: session.id, cwd: null }), { scroll: false });
     }
   }, [activeCwd, activeFileTabId, invalidateWorkspaceRestore, router, isMobile, newSessionCwd, selectedSession]);
 
@@ -849,7 +856,7 @@ export function AppShell() {
     setSystemInfoLoading(false);
     setActiveTopPanel(null);
     if (isMobile) setSidebarOpen(false);
-    router.replace(`?cwd=${encodeURIComponent(cwd)}`, { scroll: false });
+    router.replace(buildLabSearch(currentLabSearch(), { cwd, session: null }), { scroll: false });
   }, [invalidateWorkspaceRestore, router, isMobile]);
 
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
@@ -904,7 +911,7 @@ export function AppShell() {
     setNewSessionCwd(null);
     setSelectedSession(session);
     hydrateSelectedSession(session.id);
-    router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
+    router.replace(buildLabSearch(currentLabSearch(), { session: session.id, cwd: null }), { scroll: false });
   }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
 
   const deliverSessionNotification = useCallback(({
@@ -1030,8 +1037,19 @@ export function AppShell() {
       transient: false,
     }));
     hydrateSelectedSession(newSessionId);
-    router.replace(`?session=${encodeURIComponent(newSessionId)}`, { scroll: false });
+    router.replace(buildLabSearch(currentLabSearch(), { session: newSessionId, cwd: null }), { scroll: false });
   }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
+
+  const handleStartFreshSession = useCallback((prompt: string, cwd: string) => {
+    const folder = String(cwd || "").trim();
+    if (!folder) return false;
+    setSelectedSession(null);
+    setNewSessionCwd(folder);
+    setNewSessionDraftId(`fresh-${Date.now()}`);
+    setPendingFreshPrompt(prompt);
+    setTabOpenNewSession(folder);
+    return true;
+  }, []);
 
   const handleAskInNewChat = useCallback(async (
     prompt: string,
@@ -1077,7 +1095,9 @@ export function AppShell() {
       setSystemTools(null);
       setSystemInfoLoading(false);
       setActiveTopPanel(null);
-      router.replace(cwd ? `?cwd=${encodeURIComponent(cwd)}` : (typeof window !== "undefined" ? window.location.pathname : "/"), { scroll: false });
+      router.replace(cwd
+        ? buildLabSearch(currentLabSearch(), { cwd, session: null })
+        : (buildLabSearch(currentLabSearch(), { cwd: null, session: null }) || (typeof window !== "undefined" ? window.location.pathname : "/")), { scroll: false });
     }
   }, [invalidateWorkspaceRestore, router]);
 
@@ -2420,9 +2440,19 @@ export function AppShell() {
               onFilesUploaded={handleExplorerRefresh}
               onOpenSession={handleOpenSession}
               onAskInNewChat={handleAskInNewChat}
+              onStartFreshSession={handleStartFreshSession}
               quoteSelectionEnabled={quoteSelectionEnabled}
-              initialPrompt={pendingQuotePrompt?.sessionId === selectedSession?.id ? pendingQuotePrompt?.text : undefined}
-              onInitialPromptConsumed={() => setPendingQuotePrompt(null)}
+              initialPrompt={
+                pendingFreshPrompt && !selectedSession
+                  ? pendingFreshPrompt
+                  : pendingQuotePrompt?.sessionId === selectedSession?.id
+                    ? pendingQuotePrompt?.text
+                    : undefined
+              }
+              onInitialPromptConsumed={() => {
+                setPendingQuotePrompt(null);
+                setPendingFreshPrompt(null);
+              }}
               soundEnabled={soundEnabled}
               onSoundToggle={onSoundToggle}
               playDoneSound={playDoneSound}

@@ -1,34 +1,38 @@
-/** DatePool stays the session cwd. Admin code mounts as a virtual `code/` child. */
+/** DatePool stays the session cwd. Virtual `code/` is that admin's on-disk zone. */
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import {
   adminCodeHome,
+  adminCodeZone,
   allAdminCodeRoots,
-  ensureAdminCodeHome,
+  CODE_ZONE_HOME,
+  ensureAdminCodeZone,
   extraMountsFor,
 } from "./admin-workspaces";
 import { currentWebAdmin, sanitizeWebAdmin, warehouseRoot } from "./web-admin-scope";
 
 export const VIRTUAL_CODE_DIR = "code";
-export const VIRTUAL_CODE_HOME = "home";
+export const VIRTUAL_CODE_HOME = CODE_ZONE_HOME;
 
 export type VirtualCodeChild = { name: string; path: string };
 
 export function adminCodeRoot(admin = currentWebAdmin()): string {
-  return ensureAdminCodeHome(admin);
+  return ensureAdminCodeZone(admin) ? adminCodeHome(admin) : "";
 }
 
 export function listVirtualCodeChildren(admin = currentWebAdmin()): VirtualCodeChild[] {
   const name = sanitizeWebAdmin(admin);
   if (!name) return [];
-  const home = ensureAdminCodeHome(name);
+  const zone = ensureAdminCodeZone(name);
+  const home = adminCodeHome(name);
   const out: VirtualCodeChild[] = [];
   if (home) out.push({ name: VIRTUAL_CODE_HOME, path: home });
   for (const mount of extraMountsFor(name)) {
     out.push({ name: mount.name, path: mount.path });
   }
+  void zone;
   return out;
 }
 
@@ -55,15 +59,13 @@ export function resolveDualRootPath(
 ): string {
   const warehouse = warehouseRoot();
   if (!canMountVirtualCode(warehouse, admin)) return target;
+  const zone = ensureAdminCodeZone(admin);
+  if (!zone) return target;
   const prefix = resolve(join(warehouse, VIRTUAL_CODE_DIR));
   const abs = resolve(String(target || ""));
-  if (abs === prefix) return prefix;
+  if (abs === prefix) return zone;
   if (!abs.startsWith(prefix + sep)) return abs;
-  const rest = abs.slice(prefix.length + 1);
-  const [head, ...tail] = rest.split(sep);
-  const match = listVirtualCodeChildren(admin).find((child) => child.name === head);
-  if (!match) return abs;
-  return tail.length ? join(match.path, ...tail) : match.path;
+  return join(zone, abs.slice(prefix.length + 1));
 }
 
 /** `git -C` needs a directory. Start at the file so nested repos under `code/` resolve. */
@@ -85,6 +87,14 @@ export function virtualCodeDisplayPath(realPath: string, admin = currentWebAdmin
   const warehouse = warehouseRoot();
   if (!warehouse) return realPath;
   const abs = resolve(realPath);
+  const zone = adminCodeZone(admin);
+  if (zone) {
+    const root = resolve(zone);
+    if (abs === root) return join(warehouse, VIRTUAL_CODE_DIR);
+    if (abs.startsWith(root + sep)) {
+      return join(warehouse, VIRTUAL_CODE_DIR, abs.slice(root.length + 1));
+    }
+  }
   for (const child of listVirtualCodeChildren(admin)) {
     const root = resolve(child.path);
     if (abs === root) return join(warehouse, VIRTUAL_CODE_DIR, child.name);
@@ -106,7 +116,6 @@ export function termWorkspacesRoot(): string {
   return join(homedir(), ".pi", "agent", "term-ws");
 }
 
-/** Per-admin terminal view: `data` → DatePool, `code/<name>` → that admin's mounts. */
 export function terminalWorkspaceRoot(admin = currentWebAdmin()): string {
   const name = safeAdminDir(admin);
   if (!name) return "";
@@ -137,36 +146,15 @@ function ensureSymlink(link: string, target: string): void {
 
 export function ensureTerminalWorkspace(admin = currentWebAdmin()): string {
   const warehouse = warehouseRoot();
-  const children = listVirtualCodeChildren(admin);
+  const zone = ensureAdminCodeZone(admin);
   const ws = terminalWorkspaceRoot(admin);
-  if (!ws || !warehouse || !children.length) return "";
+  if (!ws || !warehouse || !zone) return "";
   mkdirSync(ws, { recursive: true });
-  const codeDir = join(ws, VIRTUAL_CODE_DIR);
-  try {
-    const current = lstatSync(codeDir);
-    if (current.isSymbolicLink() || !current.isDirectory()) {
-      rmSync(codeDir, { recursive: true, force: true });
-    }
-  } catch {
-    // missing
-  }
-  mkdirSync(codeDir, { recursive: true });
-  const keep = new Set(children.map((child) => child.name));
-  try {
-    for (const name of readdirSync(codeDir)) {
-      if (!keep.has(name)) rmSync(join(codeDir, name), { recursive: true, force: true });
-    }
-  } catch {
-    // listing is best-effort
-  }
   ensureSymlink(join(ws, "data"), resolve(warehouse));
-  for (const child of children) {
-    ensureSymlink(join(codeDir, child.name), resolve(child.path));
-  }
+  ensureSymlink(join(ws, VIRTUAL_CODE_DIR), resolve(zone));
   return ws;
 }
 
-/** Workspace terminal at DatePool becomes the admin's data+code view. */
 export function resolveTerminalCwd(requestedCwd: string, admin = currentWebAdmin()): string {
   const warehouse = warehouseRoot();
   if (isForeignTermWorkspace(requestedCwd, admin)) return "";
@@ -175,8 +163,23 @@ export function resolveTerminalCwd(requestedCwd: string, admin = currentWebAdmin
   return ensureTerminalWorkspace(admin) || requestedCwd;
 }
 
+/** DatePool bash starts in term-ws so relative `code/` follows the admin zone. */
+export function resolveAgentBashCwd(requestedCwd: string, admin = currentWebAdmin()): string {
+  return resolveTerminalCwd(requestedCwd, admin) || requestedCwd;
+}
+
+/** Map virtual `$池/code/...` strings onto the on-disk admin zone. */
+export function rewriteVirtualCodeText(text: string, admin = currentWebAdmin()): string {
+  const warehouse = warehouseRoot();
+  if (!warehouse || !text || !canMountVirtualCode(warehouse, admin)) return text;
+  const zone = adminCodeZone(admin);
+  if (!zone) return text;
+  const prefix = resolve(join(warehouse, VIRTUAL_CODE_DIR));
+  return text.split(prefix).join(resolve(zone));
+}
+
 export function adminWritableRoots(admin = currentWebAdmin()): string[] {
   return allAdminCodeRoots(admin);
 }
 
-export { adminCodeHome };
+export { adminCodeHome, adminCodeZone };

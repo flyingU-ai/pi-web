@@ -45,6 +45,7 @@ import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import { resolveShellTools } from "./powershell-settings";
 import { CHAT_ONLY_RESOURCE_LOADER_OPTIONS, contextFilesSystemPrompt } from "./chat-only";
 import { createExactSystemPromptExtension } from "./exact-system-prompt";
+import { createActiveGoalExtension } from "./active-goal-node";
 import { createPiWebBuiltinExtensions } from "./builtin-extensions";
 import type { McpHost } from "./mcp-host";
 import { mcpPromptPreparation, type McpCommandCandidate } from "./mcp-command";
@@ -1091,6 +1092,22 @@ export class AgentSessionWrapper {
 
       case "follow_up": {
         const followImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+        const pending = typeof this.inner.getFollowUpMessages === "function"
+          ? this.inner.getFollowUpMessages()
+          : [];
+        const steering = typeof this.inner.getSteeringMessages === "function"
+          ? this.inner.getSteeringMessages()
+          : [];
+        // Same-parent double follow-up (08:05 then 08:09) kept the stale short
+        // prompt. Keep only the latest follow-up; restore any steering.
+        if (Array.isArray(pending) && pending.length > 0 && typeof this.inner.clearQueue === "function") {
+          await this.inner.clearQueue();
+          if (Array.isArray(steering)) {
+            for (const text of steering) {
+              if (typeof text === "string" && text.trim()) await this.inner.steer(text);
+            }
+          }
+        }
         await this.inner.followUp(command.message as string, followImages?.length ? followImages : undefined);
         return null;
       }
@@ -2412,6 +2429,7 @@ export async function startRpcSession(
         : {
             extensionFactories: [
               ...(builtins?.extensions ?? []),
+              createActiveGoalExtension(sessionCwd),
               createReadOnlyMcpPolicyExtension(),
               createProjectCommandBashExtension({
                 cwd: sessionCwd,

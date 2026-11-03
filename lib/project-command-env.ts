@@ -12,6 +12,7 @@ import {
   isWalkLikeCommand,
   resolveBashTimeout,
 } from "./web-bash-guard";
+import { resolveAgentBashCwd, rewriteVirtualCodeText } from "./dual-roots";
 
 const HOST_EXTENSION_NAME = "pi-web-project-command-environment";
 const HOST_EXTENSION_PATH = `<inline:${HOST_EXTENSION_NAME}>`;
@@ -90,6 +91,8 @@ export function createProjectCommandBashOperations(
 
   return {
     exec(command, cwd, executionOptions) {
+      const resolvedCommand = rewriteVirtualCodeText(command);
+      const resolvedCwd = resolveAgentBashCwd(cwd);
       const environment = withAgentBinDirectory(
         sanitizeProjectCommandEnvironment(executionOptions.env ?? baseEnvironment, platform),
         agentBinDir,
@@ -125,7 +128,7 @@ export function createProjectCommandBashOperations(
         }, abortSettleGraceMs));
       };
 
-      const execution = localOperations.exec(command, cwd, {
+      const execution = localOperations.exec(resolvedCommand, resolvedCwd, {
         ...executionOptions,
         env: environment,
         // Callers finalize their output once the command is released; a

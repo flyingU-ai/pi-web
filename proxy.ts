@@ -24,6 +24,17 @@ function sanitizeWebAdmin(admin: string): string {
   return name;
 }
 
+function isSpaNavigation(request: NextRequest): boolean {
+  const dest = (request.headers.get("sec-fetch-dest") || "").toLowerCase();
+  if (dest === "empty") return true;
+  return Boolean(
+    request.headers.get("rsc")
+    || request.headers.get("next-router-state-tree")
+    || request.headers.get("next-router-prefetch")
+    || request.headers.get("next-url"),
+  );
+}
+
 function withAdminCookie(request: NextRequest, res: NextResponse): NextResponse {
   const isApiRequest = request.nextUrl.pathname === "/api"
     || request.nextUrl.pathname.startsWith("/api/");
@@ -35,8 +46,9 @@ function withAdminCookie(request: NextRequest, res: NextResponse): NextResponse 
       httpOnly: true,
       maxAge: 60 * 60 * 24 * 30,
     });
-  } else if (!isApiRequest) {
-    // Document load without ?admin= must not inherit the previous login.
+  } else if (!isApiRequest && !isSpaNavigation(request)) {
+    // Full document / iframe load without ?admin= must not inherit the previous login.
+    // App Router client navigations (dest=empty or RSC) keep the current cookie.
     res.cookies.set("aoi_admin", "", { path: "/", sameSite: "lax", httpOnly: true, maxAge: 0 });
   }
   return res;

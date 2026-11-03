@@ -1,6 +1,17 @@
-/** Extra repo mounts only. Every signed-in admin also gets a private code home. */
+/** One on-disk tree per admin: `.agent/code/<admin>/{home, extra-symlinks}`. */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename, join, resolve, sep } from "node:path";
 import { sanitizeWebAdmin, warehouseRoot } from "./web-admin-scope";
@@ -9,32 +20,97 @@ export type ExtraMount = { name: string; path: string };
 export type AdminWorkspaceMap = Record<string, string>;
 
 const RESERVED_MOUNT_NAMES = new Set(["", ".", "..", "home", "code", "data"]);
+export const CODE_ZONE_HOME = "home";
 
-export function codeHomesRoot(env: NodeJS.ProcessEnv = process.env): string {
-  const explicit = String(env.PI_WEB_CODE_HOMES_ROOT || "").trim();
-  if (explicit) return resolve(explicit);
+function warehouseFromEnv(env: NodeJS.ProcessEnv): string {
   const data = String(env.ANNOTATION_WORKSPACE_ROOT || env.PI_WEB_OPEN_FOLDER || "").trim();
-  if (data) return join(resolve(data), ".agent", "code-homes");
-  const warehouse = warehouseRoot();
+  if (data) return resolve(data);
+  return warehouseRoot();
+}
+
+/** SSOT parent: `$池/.agent/code`. */
+export function codeZonesRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = String(env.PI_WEB_CODE_ZONES_ROOT || env.PI_WEB_CODE_HOMES_ROOT || "").trim();
+  if (explicit) return resolve(explicit);
+  const warehouse = warehouseFromEnv(env);
+  return warehouse ? join(warehouse, ".agent", "code") : "";
+}
+
+/** Legacy `$池/.agent/code-homes` — migrated into `code/<admin>/home`. */
+export function legacyCodeHomesRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const warehouse = warehouseFromEnv(env);
   return warehouse ? join(warehouse, ".agent", "code-homes") : "";
+}
+
+/** Kept so lab checks still see the old leaf name while we migrate. */
+export function codeHomesRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return legacyCodeHomesRoot(env);
+}
+
+export function adminCodeZone(
+  admin: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const name = sanitizeWebAdmin(admin);
+  const root = codeZonesRoot(env);
+  if (!name || !root) return "";
+  return join(root, name);
 }
 
 export function adminCodeHome(
   admin: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
+  const zone = adminCodeZone(admin, env);
+  return zone ? join(zone, CODE_ZONE_HOME) : "";
+}
+
+function ensureSymlink(link: string, target: string): void {
+  try {
+    const current = lstatSync(link);
+    if (current.isSymbolicLink() && readlinkSync(link) === target) return;
+    rmSync(link, { recursive: true, force: true });
+  } catch {
+    // missing
+  }
+  symlinkSync(target, link);
+}
+
+function migrateLegacyHome(admin: string, home: string, env: NodeJS.ProcessEnv): void {
   const name = sanitizeWebAdmin(admin);
-  const root = codeHomesRoot(env);
-  if (!name || !root) return "";
-  return join(root, name);
+  const legacy = join(legacyCodeHomesRoot(env), name);
+  if (!name || !existsSync(legacy) || existsSync(home)) return;
+  try {
+    if (lstatSync(legacy).isDirectory()) {
+      mkdirSync(dirnameSafe(home), { recursive: true });
+      renameSync(legacy, home);
+    }
+  } catch {
+    // leave legacy in place; home will be created empty
+  }
+}
+
+function dirnameSafe(filePath: string): string {
+  const idx = filePath.lastIndexOf(sep);
+  return idx <= 0 ? filePath : filePath.slice(0, idx);
 }
 
 export function ensureAdminCodeHome(
   admin: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
+  return ensureAdminCodeZone(admin, env) ? adminCodeHome(admin, env) : "";
+}
+
+export function ensureAdminCodeZone(
+  admin: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const zone = adminCodeZone(admin, env);
   const home = adminCodeHome(admin, env);
-  if (!home) return "";
+  if (!zone || !home) return "";
+  mkdirSync(zone, { recursive: true });
+  migrateLegacyHome(admin, home, env);
   if (!existsSync(home)) {
     mkdirSync(home, { recursive: true });
     const readme = join(home, "README.md");
@@ -50,7 +126,25 @@ export function ensureAdminCodeHome(
       // git is optional; upload/CRUD still work without a repo
     }
   }
-  return home;
+  const extras = extraMountsFor(admin, env);
+  const keep = new Set<string>([CODE_ZONE_HOME, ...extras.map((item) => item.name)]);
+  for (const mount of extras) {
+    ensureSymlink(join(zone, mount.name), resolve(mount.path));
+  }
+  try {
+    for (const name of readdirSync(zone)) {
+      if (keep.has(name)) continue;
+      const abs = join(zone, name);
+      try {
+        if (lstatSync(abs).isSymbolicLink()) rmSync(abs, { force: true });
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // listing is best-effort
+  }
+  return zone;
 }
 
 function mountNameFromPath(abs: string, taken: Set<string>): string {
@@ -160,10 +254,12 @@ export function extraMountsFor(
 ): ExtraMount[] {
   const name = sanitizeWebAdmin(admin);
   if (!name) return [];
-  const mine = adminCodeHome(name, env);
+  const zone = adminCodeZone(name, env);
+  const home = adminCodeHome(name, env);
   const all = loadAdminExtraMounts(env);
   return (all[name] || []).filter((mount) => {
-    if (mine && (mount.path === mine || mount.path.startsWith(mine + sep))) return false;
+    if (home && (mount.path === home || mount.path.startsWith(home + sep))) return false;
+    if (zone && (mount.path === zone || mount.path.startsWith(zone + sep))) return false;
     return !isForeignAdminCodePath(mount.path, name, env);
   });
 }
@@ -172,8 +268,10 @@ export function allAdminCodeRoots(
   admin: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  const home = ensureAdminCodeHome(admin, env);
+  const zone = ensureAdminCodeZone(admin, env);
   const roots = new Set<string>();
+  if (zone) roots.add(zone);
+  const home = adminCodeHome(admin, env);
   if (home) roots.add(home);
   for (const mount of extraMountsFor(admin, env)) roots.add(mount.path);
   return [...roots];
@@ -187,6 +285,13 @@ export function resolveAdminCodeRoot(
   return adminCodeHome(admin, env);
 }
 
+function underTree(target: string, root: string): boolean {
+  if (!root) return false;
+  const abs = resolve(target);
+  const base = resolve(root);
+  return abs === base || abs.startsWith(base + sep);
+}
+
 export function isForeignAdminCodePath(
   target: string,
   admin: string,
@@ -194,9 +299,9 @@ export function isForeignAdminCodePath(
 ): boolean {
   const abs = resolve(String(target || ""));
   const name = sanitizeWebAdmin(admin);
-  const homes = codeHomesRoot(env);
-  if (homes) {
-    const base = resolve(homes);
+  for (const parent of [codeZonesRoot(env), legacyCodeHomesRoot(env)]) {
+    if (!parent) continue;
+    const base = resolve(parent);
     if (abs === base || abs.startsWith(base + sep)) {
       if (!name) return true;
       const mine = resolve(join(base, name));
@@ -206,8 +311,7 @@ export function isForeignAdminCodePath(
   for (const [other, mounts] of Object.entries(loadAdminExtraMounts(env))) {
     if (other === name) continue;
     for (const mount of mounts) {
-      const root = resolve(mount.path);
-      if (abs === root || abs.startsWith(root + sep)) return true;
+      if (underTree(abs, mount.path)) return true;
     }
   }
   return false;

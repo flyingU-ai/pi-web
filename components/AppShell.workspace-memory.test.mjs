@@ -8,6 +8,7 @@ import { createJiti } from "jiti";
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
 const jiti = createJiti(import.meta.url);
 const draftStore = await jiti.import("../lib/draft-store.ts");
+const { buildLabSearch } = await jiti.import("../lib/lab-query.ts");
 
 function callbackBody(name, nextName) {
   const start = source.indexOf(`const ${name} = useCallback`);
@@ -16,6 +17,12 @@ function callbackBody(name, nextName) {
   assert.notEqual(end, -1, `${nextName} callback not found after ${name}`);
   return source.slice(start, end);
 }
+
+test("session and cwd URL replaces keep admin via buildLabSearch", () => {
+  assert.match(source, /buildLabSearch\(currentLabSearch\(\)/);
+  assert.doesNotMatch(source, /router\.replace\(`\?session=/);
+  assert.doesNotMatch(source, /router\.replace\(`\?cwd=/);
+});
 
 test("explicit context changes invalidate a pending workspace restore", () => {
   const callbacks = [
@@ -78,6 +85,7 @@ test("New restores the draft after session navigation and workspace auto-restore
         URLSearchParams,
         window: { location: { pathname: "/", search: "" } },
         router: { replace() {} },
+        buildLabSearch,
         fetch: () => response.promise,
         getLastOpenSession: (key) => key === cwd ? session.id : null,
         clearLastOpen() {},
@@ -104,6 +112,7 @@ test("New restores the draft after session navigation and workspace auto-restore
         sessionCatalog: [],
         sessionKey: 0,
       });
+      context.currentLabSearch = () => context.window.location.search;
       context.invalidateWorkspaceRestore = () => context.workspaceRestoreTokenRef.current++;
       for (const [setter] of callbacks.matchAll(/\bset[A-Z]\w*(?=\()/g)) {
         const state = setter[3].toLowerCase() + setter.slice(4);
