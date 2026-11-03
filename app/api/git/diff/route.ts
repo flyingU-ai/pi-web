@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { lstatSync } from "fs";
 import path from "path";
+import { gitCwdForPath, resolveDualRootPath } from "@/lib/dual-roots";
 import { getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed, isWindowsAbsolutePath } from "@/lib/file-access";
 import { getGitFileDiff } from "@/lib/git-changes";
 import { hasParentDirectorySegment } from "@/lib/path-security";
+import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 
 function isDiffPathAllowed(filePath: string, allowedRoots: Set<string>): boolean {
   if (hasParentDirectorySegment(filePath)) return false;
@@ -35,17 +37,23 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "path must be an absolute path" }, { status: 400 });
     }
 
+    const admin = (await resolveCurrentAdminAsync()) || adminFromRequest(request);
+    const gitCwd = gitCwdForPath(filePath || cwd, admin);
+    const gitPath = resolveDualRootPath(filePath, admin);
     const allowedRoots = await getAllowedFileRoots();
     if (!isFilePathAllowed(cwd, allowedRoots) || !isFilePathAllowed(filePath, allowedRoots)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
+    if (!isFilePathAllowed(gitCwd, allowedRoots) || !isFilePathAllowed(gitPath, allowedRoots)) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
     // Check the target as well as cwd: a directory junction inside a repository
     // can otherwise expose an outside file through an apparently local path.
-    if (!isExistingFilePathAllowed(cwd, allowedRoots) || !isDiffPathAllowed(filePath, allowedRoots)) {
+    if (!isExistingFilePathAllowed(gitCwd, allowedRoots) || !isDiffPathAllowed(gitPath, allowedRoots)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
-    return NextResponse.json(await getGitFileDiff(cwd, filePath));
+    return NextResponse.json(await getGitFileDiff(gitCwd, gitPath));
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }

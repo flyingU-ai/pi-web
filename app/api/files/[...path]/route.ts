@@ -30,6 +30,9 @@ import {
   validateUploadFileNames,
 } from "@/lib/file-upload";
 import { parseFormDataWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
+import { canMountVirtualCode, resolveDualRootPath, VIRTUAL_CODE_DIR } from "@/lib/dual-roots";
+import { isDatePoolRoot } from "@/lib/web-bash-guard";
+import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 import { filePathFromApiSegments, samePath } from "@/lib/paths";
 import { hasParentDirectorySegment } from "@/lib/path-security";
 import { readTextPreviewChunk } from "@/lib/text-preview";
@@ -71,10 +74,15 @@ function parseFileRequestType(value: string): FileRequestType | null {
   return FILE_REQUEST_TYPE_SET.has(value) ? (value as FileRequestType) : null;
 }
 
-async function getUploadDirectory(segments: string[]): Promise<
+async function getUploadDirectory(
+  segments: string[],
+  request: NextRequest,
+): Promise<
   { directory: string } | { response: NextResponse }
 > {
-  const directory = filePathFromApiSegments(segments);
+  const admin = (await resolveCurrentAdminAsync()) || adminFromRequest(request);
+  const requested = filePathFromApiSegments(segments);
+  const directory = resolveDualRootPath(requested, admin);
   const allowedRoots = await getAllowedFileRoots();
   if (!isFilePathAllowed(directory, allowedRoots)) {
     return { response: NextResponse.json({ error: "Access denied" }, { status: 403 }) };
@@ -152,7 +160,7 @@ export async function POST(
     const type = request.nextUrl.searchParams.get("type") ?? "upload";
     if (type === "allow-link") return allowLinkedDirectory(request, segments);
 
-    const uploadDirectory = await getUploadDirectory(segments);
+    const uploadDirectory = await getUploadDirectory(segments, request);
     if ("response" in uploadDirectory) return uploadDirectory.response;
     const { directory } = uploadDirectory;
 
@@ -442,7 +450,9 @@ export async function GET(
 ) {
   try {
     const { path: segments } = await params;
-    const filePath = filePathFromApiSegments(segments);
+    const admin = (await resolveCurrentAdminAsync()) || adminFromRequest(request);
+    const requestedPath = filePathFromApiSegments(segments);
+    const filePath = resolveDualRootPath(requestedPath, admin);
     // Authorization collapses `..` lexically, but the filesystem applies it
     // after following links, so `link/../x` names a file beside the link's
     // target, outside the roots. URL parsing already drops real `..` segments;
@@ -683,6 +693,12 @@ export async function GET(
         if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
+
+    if (isDatePoolRoot(requestedPath) && canMountVirtualCode(requestedPath, admin)) {
+      if (!entries.some((e) => e.name === VIRTUAL_CODE_DIR)) {
+        entries.unshift({ name: VIRTUAL_CODE_DIR, isDir: true, size: 0, modified: "" });
+      }
+    }
 
     return NextResponse.json({
       entries: withOutsideLinkTargets(filePath, entries, dirents, allowedRoots),

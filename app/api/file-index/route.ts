@@ -11,6 +11,8 @@ import {
 } from "@/lib/file-access";
 import { buildEntriesFromFiles, filterFileEntries, type FileIndexEntry } from "@/lib/file-fuzzy";
 import { isHiddenOutsideGit } from "@/lib/file-tree-visibility";
+import { adminCodeRoot, canMountVirtualCode, VIRTUAL_CODE_DIR } from "@/lib/dual-roots";
+import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 import { isDatePoolRoot, isPoolHeavyDir } from "@/lib/web-bash-guard";
 
 const execFileAsync = promisify(execFile);
@@ -132,6 +134,7 @@ export async function GET(req: NextRequest) {
     }
     const query = req.nextUrl.searchParams.get("q")?.slice(0, MAX_QUERY_LENGTH) ?? "";
 
+    const admin = (await resolveCurrentAdminAsync()) || adminFromRequest(req);
     const allowedRoots = await getAllowedFileRoots();
     if (!isFilePathAllowed(cwd, allowedRoots)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
@@ -152,17 +155,30 @@ export async function GET(req: NextRequest) {
 
     const cache = getIndexCache();
     const now = Date.now();
-    let cached = cache.get(cwd);
+    const codeRoot = canMountVirtualCode(cwd, admin) ? adminCodeRoot(admin) : "";
+    const cacheKey = codeRoot ? `${cwd}::${codeRoot}` : cwd;
+    let cached = cache.get(cacheKey);
     if (!cached || cached.expiresAt <= now) {
-      const listing = isDatePoolRoot(cwd) || isPoolHeavyDir(cwd)
+      let listing = isDatePoolRoot(cwd) || isPoolHeavyDir(cwd)
         ? listDatePoolTop(cwd)
         : (await listWithGit(cwd)) ?? listWithWalk(cwd);
+      if (codeRoot && (isDatePoolRoot(cwd) || isPoolHeavyDir(cwd))) {
+        const extra = (await listWithGit(codeRoot)) ?? listWithWalk(codeRoot);
+        listing = {
+          files: [
+            ...listing.files.filter((name) => name !== `${VIRTUAL_CODE_DIR}/` && !name.startsWith(`${VIRTUAL_CODE_DIR}/`)),
+            `${VIRTUAL_CODE_DIR}/`,
+            ...extra.files.map((rel) => `${VIRTUAL_CODE_DIR}/${rel.replace(/^\/+/, "")}`),
+          ],
+          hardTruncated: listing.hardTruncated || extra.hardTruncated,
+        };
+      }
       for (const [key, entry] of cache) {
         if (entry.expiresAt <= now) cache.delete(key);
       }
       if (cache.size >= CACHE_MAX_ENTRIES) cache.clear();
       cached = { listing, expiresAt: now + CACHE_TTL_MS };
-      cache.set(cwd, cached);
+      cache.set(cacheKey, cached);
     }
 
     if (query) {

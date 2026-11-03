@@ -57,6 +57,17 @@ export interface FileExplorerHandle {
   openUploadPicker: () => void;
 }
 
+/** Upload into the deepest open code/ folder; otherwise the DatePool cwd. */
+export function uploadDirFromExpanded(cwd: string, expanded: Iterable<string>): string {
+  const root = normalizeFilePathSlashes(cwd).replace(/\/+$/, "");
+  const codeRoot = `${root}/code`;
+  const hits = [...expanded]
+    .map((p) => normalizeFilePathSlashes(p))
+    .filter((p) => p === codeRoot || p.startsWith(`${codeRoot}/`))
+    .sort((a, b) => b.length - a.length);
+  return hits[0] || cwd;
+}
+
 type UploadPhase = "idle" | "checking" | "uploading";
 
 interface UploadSummary {
@@ -777,6 +788,11 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     });
   }, []);
 
+  const uploadDir = useMemo(
+    () => uploadDirFromExpanded(cwd, expandedPaths),
+    [cwd, expandedPaths],
+  );
+
   const applyUploadResult = useCallback((data: UploadResponse) => {
     const uploaded = data.uploaded ?? [];
     const skipped = data.skipped ?? [];
@@ -784,10 +800,10 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     setUploadSummary({ uploaded, skipped, errors });
 
     if (uploaded.length > 0) {
-      setHighlightedPaths(new Set(uploaded.map((name) => joinFilePath(cwd, name))));
+      setHighlightedPaths(new Set(uploaded.map((name) => joinFilePath(uploadDir, name))));
       setTreeRefreshKey((key) => key + 1);
     }
-  }, [cwd]);
+  }, [uploadDir]);
 
   const performUpload = useCallback(async (
     files: File[],
@@ -799,7 +815,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     setUploadPhase("uploading");
 
     try {
-      const { status, data } = await uploadFiles(cwd, files, strategy, setUploadProgress);
+      const { status, data } = await uploadFiles(uploadDir, files, strategy, setUploadProgress);
       if (status === 409 && data.conflicts?.length) {
         setPendingConflict({
           files,
@@ -818,7 +834,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     } finally {
       setUploadPhase("idle");
     }
-  }, [applyUploadResult, cwd]);
+  }, [applyUploadResult, uploadDir]);
 
   const prepareUpload = useCallback(async (files: File[]) => {
     if (files.length === 0 || uploadBusy) return;
@@ -831,7 +847,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 
     try {
       const res = await fetch(
-        `/api/files/${encodeFilePathForApi(cwd)}?type=upload-check`,
+        `/api/files/${encodeFilePathForApi(uploadDir)}?type=upload-check`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -856,7 +872,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     } finally {
       setUploadPhase("idle");
     }
-  }, [cwd, performUpload, uploadBusy]);
+  }, [performUpload, uploadBusy, uploadDir]);
 
   const handleUploadInput = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);

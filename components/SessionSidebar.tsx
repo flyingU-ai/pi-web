@@ -10,6 +10,7 @@ import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { useI18n } from "@/hooks/useI18n";
+import { PRODUCT_DISPLAY_NAME } from "@/lib/product";
 import { useResizablePanel } from "@/hooks/useResizablePanel";
 import { useScrollbarVisibility } from "@/hooks/useScrollbarVisibility";
 import { DirectoryPicker } from "./DirectoryPicker";
@@ -357,7 +358,7 @@ function PiWebTitle() {
   const [scrambling, setScrambling] = useState(false);
   const revertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const target = showVersion ? `${process.env.NEXT_PUBLIC_APP_VERSION ?? "0.0.0"}p${process.env.NEXT_PUBLIC_PI_VERSION ?? "0.0.0"}` : "Pi Web";
+  const target = showVersion ? `${process.env.NEXT_PUBLIC_APP_VERSION ?? "0.0.0"}` : PRODUCT_DISPLAY_NAME;
   const display = useScramble(target, scrambling);
 
   const triggerScramble = useCallback((toVersion: boolean) => {
@@ -758,7 +759,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       (id) => !allSessions.some((session) => session.id === id),
     );
     if (completedInBackground.length > 0 || hasUnlistedRunningSession) {
-      loadSessions(false, true);
+      loadSessions(false, false);
     }
     if (completedWithNotifications.length > 0) {
       onBackgroundTaskDone?.();
@@ -1137,10 +1138,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
              label: t("sidebar.openRepoRoot"),
              title: t("sidebar.openRepoRootTitle"),
           }
-        : {
-             label: t("sidebar.gitRepoRootOnly"),
-             title: t("sidebar.gitRepoRootOnlyTitle"),
-          })
+        : null)
     : null;
   const worktreeLoading = Boolean(selectedCwd && worktreeLoadingCwd === selectedCwd);
   const inactiveWorktreeSelector = worktreeGuide

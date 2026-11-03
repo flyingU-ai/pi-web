@@ -99,6 +99,36 @@ function countUntrackedTextLines(filePath: string): number {
   }
 }
 
+const NESTED_GIT_CHILD_CAP = 20;
+
+function listImmediateGitChildren(cwd: string): string[] {
+  try {
+    return fs.readdirSync(cwd, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(cwd, entry.name, ".git")))
+      .slice(0, NESTED_GIT_CHILD_CAP)
+      .map((entry) => path.join(cwd, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+/** Folder-of-repos (e.g. promptDet) unions each immediate child that has a `.git`. */
+export async function getGitStatusForest(cwd: string): Promise<GitStatusResponse> {
+  const direct = await getGitStatus(cwd);
+  if (direct.isGitRepository) return direct;
+  const children = listImmediateGitChildren(cwd);
+  if (children.length === 0) return direct;
+  const parts = await Promise.all(children.map((child) => getGitStatus(child)));
+  const files = parts.flatMap((part) => part.files);
+  return {
+    isGitRepository: parts.some((part) => part.isGitRepository),
+    repositoryRoot: cwd,
+    files,
+    additions: parts.reduce((sum, part) => sum + part.additions, 0),
+    deletions: parts.reduce((sum, part) => sum + part.deletions, 0),
+  };
+}
+
 export async function getGitStatus(cwd: string): Promise<GitStatusResponse> {
   const repositoryRoot = await findRepositoryRoot(cwd);
   if (!repositoryRoot) {
