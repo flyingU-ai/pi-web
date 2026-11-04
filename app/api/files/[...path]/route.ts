@@ -738,15 +738,24 @@ export async function GET(
         return a.name.localeCompare(b.name);
       });
 
-    if (isDatePoolRoot(requestedPath) && canMountVirtualCode(requestedPath, admin)) {
-      if (!entries.some((e) => e.name === VIRTUAL_CODE_DIR)) {
-        entries.unshift({ name: VIRTUAL_CODE_DIR, isDir: true, size: 0, modified: "" });
+    let codeMount: { ok: boolean; reason?: string } | undefined;
+    if (isDatePoolRoot(requestedPath)) {
+      if (!admin) {
+        codeMount = { ok: false, reason: "admin_required" };
+      } else if (!canMountVirtualCode(requestedPath, admin)) {
+        codeMount = { ok: false, reason: "blocked_by_real_code_dir" };
+      } else {
+        codeMount = { ok: true };
+        if (!entries.some((e) => e.name === VIRTUAL_CODE_DIR)) {
+          entries.unshift({ name: VIRTUAL_CODE_DIR, isDir: true, size: 0, modified: "" });
+        }
       }
     }
 
     return NextResponse.json({
       entries: withOutsideLinkTargets(filePath, entries, dirents, allowedRoots),
       path: filePath,
+      codeMount,
     });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

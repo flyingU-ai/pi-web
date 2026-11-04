@@ -18,7 +18,7 @@ export type PhaseLabelHint = {
  * phase in the meantime reads as a hang. Compaction is what the user needs to know.
  *
  * waiting_model is first-token wait (prefill/decode), not GGUF load. Be honest:
- * bash still running, llama down, fat context, otherwise "generating".
+ * bash still running, llama down, fat context, otherwise "Working".
  */
 export function phaseLabel(
   phase: AgentPhase,

@@ -673,3 +673,61 @@ test("keeps the registered name where no result names the server and tool", (t) 
   });
   assert.match(textOf(html), /mcp__docs_v2__search_pages\{\}/);
 });
+
+test("keeps a running bash card in progress with Elapsed and live stdout", () => {
+  const block = {
+    type: "toolCall",
+    toolCallId: "call-bash-live",
+    toolName: "bash",
+    input: { command: "ls /dataset/coco_fu/AgentSMarkDatePoolv2/code" },
+  };
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    timestamp: 1_000,
+    content: [block],
+  }, {
+    toolStartedAt: new Map([[block.toolCallId, 1_000]]),
+    toolResults: new Map([[block.toolCallId, {
+      role: "toolResult",
+      toolCallId: block.toolCallId,
+      toolName: "bash",
+      content: [{ type: "text", text: "home\npromptDet" }],
+    }]]),
+  });
+  assert.match(html, /data-tool-state="running"/);
+  assert.match(html, /data-tool-timer="elapsed"/);
+  assert.match(html, /Elapsed /);
+  assert.match(html, /home\npromptDet/);
+  assert.doesNotMatch(html, /border:1px solid rgba\(34,197,94,0\.25\)/);
+  assert.doesNotMatch(html, /Took /);
+});
+
+test("labels a finished bash card Took without treating a timestamped result as live", () => {
+  const block = {
+    type: "toolCall",
+    toolCallId: "call-bash-done",
+    toolName: "bash",
+    input: { command: "ls code" },
+  };
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    timestamp: 1_000,
+    content: [block],
+  }, {
+    toolResults: new Map([[block.toolCallId, {
+      role: "toolResult",
+      toolCallId: block.toolCallId,
+      toolName: "bash",
+      timestamp: 11_400,
+      content: [{ type: "text", text: "home" }],
+    }]]),
+  });
+  assert.match(html, /data-tool-state="done"/);
+  assert.match(html, /data-tool-timer="took"/);
+  assert.match(html, /Took 10\.4s/);
+  assert.match(html, /border:1px solid rgba\(34,197,94,0\.25\)/);
+});

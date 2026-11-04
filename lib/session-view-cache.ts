@@ -1,10 +1,11 @@
-// Bounded in-memory snapshot of one session's rendered view, so switching back
+// Bounded snapshot of one session's rendered view, so switching back
 // to a recently visited session shows history immediately while a background
 // freshness check runs.
 //
 // Constraints (deliberate):
-// - Page-memory only. Never localStorage/IndexedDB/Service Worker, never sent
-//   anywhere. Cleared by a full page reload by design.
+// - Memory LRU plus a same-tab sessionStorage copy of *settled history only*.
+//   Refresh can restore the last window; a new tab starts empty.
+// - Never localStorage/IndexedDB/Service Worker, never sent to the model.
 // - LRU: at most MAX_SESSIONS sessions and MAX_TOTAL_BYTES serialized bytes;
 //   oversize or error snapshots are simply not cached.
 // - Only *settled history* is cached: the confirmed message window, entry ids,
@@ -37,13 +38,76 @@ export interface SessionViewSnapshot {
 const MAX_SESSIONS = 8;
 const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 const TTL_MS = 10 * 60_000;
+const PERSIST_KEY = "pi-web.session-view.v1";
+const PERSIST_MAX_SESSIONS = 3;
+const PERSIST_MAX_BYTES = 1_500_000;
 
 declare global {
 	var __piSessionViewCache: Map<string, SessionViewSnapshot> | undefined;
+	var __piSessionViewCacheHydrated: boolean | undefined;
+}
+
+function persistStore(): Pick<Storage, "getItem" | "setItem" | "removeItem"> | null {
+	try {
+		const storage = globalThis.sessionStorage;
+		if (!storage || typeof storage.getItem !== "function") return null;
+		return storage;
+	} catch {
+		return null;
+	}
+}
+
+function persistSnapshots(store: Map<string, SessionViewSnapshot>): void {
+	const storage = persistStore();
+	if (!storage) return;
+	const entries: SessionViewSnapshot[] = [];
+	let bytes = 2;
+	for (const snapshot of [...store.values()].reverse()) {
+		if (entries.length >= PERSIST_MAX_SESSIONS) break;
+		if (Date.now() - snapshot.savedAt > TTL_MS) continue;
+		const next = JSON.stringify(snapshot);
+		if (bytes + next.length > PERSIST_MAX_BYTES) continue;
+		entries.push(snapshot);
+		bytes += next.length + 1;
+	}
+	try {
+		if (entries.length === 0) storage.removeItem(PERSIST_KEY);
+		else storage.setItem(PERSIST_KEY, JSON.stringify(entries.reverse()));
+	} catch {
+		/* quota / private mode */
+	}
+}
+
+function hydrateFromSessionStorage(): Map<string, SessionViewSnapshot> {
+	const store = new Map<string, SessionViewSnapshot>();
+	const storage = persistStore();
+	if (!storage) return store;
+	try {
+		const raw = storage.getItem(PERSIST_KEY);
+		if (!raw) return store;
+		const parsed = JSON.parse(raw) as unknown;
+		if (!Array.isArray(parsed)) return store;
+		for (const item of parsed) {
+			if (!item || typeof item !== "object") continue;
+			const snapshot = item as SessionViewSnapshot;
+			if (!snapshot.sessionId || !snapshot.revision) continue;
+			if (typeof snapshot.savedAt !== "number") continue;
+			if (Date.now() - snapshot.savedAt > TTL_MS) continue;
+			store.set(snapshot.sessionId, snapshot);
+		}
+	} catch {
+		try { persistStore()?.removeItem(PERSIST_KEY); } catch { /* ignore */ }
+	}
+	return store;
 }
 
 function cache(): Map<string, SessionViewSnapshot> {
-	if (!globalThis.__piSessionViewCache) globalThis.__piSessionViewCache = new Map();
+	if (!globalThis.__piSessionViewCache) {
+		globalThis.__piSessionViewCache = globalThis.__piSessionViewCacheHydrated
+			? new Map()
+			: hydrateFromSessionStorage();
+		globalThis.__piSessionViewCacheHydrated = true;
+	}
 	return globalThis.__piSessionViewCache;
 }
 
@@ -97,15 +161,20 @@ export function setSessionViewSnapshot(snapshot: Omit<SessionViewSnapshot, "save
 	if (bytes > MAX_TOTAL_BYTES) return false;
 	store.set(entry.sessionId, entry);
 	evictToFit();
+	persistSnapshots(store);
 	return cache().has(entry.sessionId);
 }
 
 export function deleteSessionViewSnapshot(sessionId: string): void {
-	cache().delete(sessionId);
+	const store = cache();
+	store.delete(sessionId);
+	persistSnapshots(store);
 }
 
 export function clearSessionViewCache(): void {
-	cache().clear();
+	const store = cache();
+	store.clear();
+	persistSnapshots(store);
 }
 
 /** True when a cached window still covers every entry the UI has loaded. */
@@ -121,4 +190,5 @@ export function snapshotCoversLoadedEntries(
 /** Test seam: drop all module state. */
 export function resetSessionViewCacheForTests(): void {
 	globalThis.__piSessionViewCache = undefined;
+	globalThis.__piSessionViewCacheHydrated = undefined;
 }

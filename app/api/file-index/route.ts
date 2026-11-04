@@ -166,23 +166,13 @@ export async function GET(req: NextRequest) {
         ? listDatePoolTop(cwd)
         : (await listWithGit(cwd)) ?? listWithWalk(cwd);
       if (codeChildren.length && (isDatePoolRoot(cwd) || isPoolHeavyDir(cwd))) {
-        const extras = await Promise.all(
-          codeChildren.map(async (child) => {
-            const listed = (await listWithGit(child.path)) ?? listWithWalk(child.path);
-            return {
-              files: listed.files.map((rel) => `${VIRTUAL_CODE_DIR}/${child.name}/${rel.replace(/^\/+/, "")}`),
-              hardTruncated: listed.hardTruncated,
-            };
-          }),
-        );
         listing = {
           files: [
             ...listing.files.filter((name) => name !== `${VIRTUAL_CODE_DIR}/` && !name.startsWith(`${VIRTUAL_CODE_DIR}/`)),
             `${VIRTUAL_CODE_DIR}/`,
             ...codeChildren.map((child) => `${VIRTUAL_CODE_DIR}/${child.name}/`),
-            ...extras.flatMap((item) => item.files),
           ],
-          hardTruncated: listing.hardTruncated || extras.some((item) => item.hardTruncated),
+          hardTruncated: listing.hardTruncated,
         };
       }
       for (const [key, entry] of cache) {

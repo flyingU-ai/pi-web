@@ -1,7 +1,8 @@
 /**
  * DatePool Chat isolation: one pi-web process, sessions per admin.
  * Shared `$池/.agent/pi-web` stays models / AGENTS / skills.
- * JSONL lives in `$池/.agent/sessions/<admin>/pi`.
+ * JSONL lives on the host disk: `PI_WEB_SESSIONS_ROOT/<admin>/pi`,
+ * falling back to `$池/.agent/sessions/<admin>/pi`.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolve as resolvePath, sep } from "node:path";
@@ -61,9 +62,15 @@ export function runWithWebAdmin<T>(admin: string, fn: () => T): T {
   return adminAls.run(sanitizeWebAdmin(admin), fn);
 }
 
-export function scopedSessionsDir(admin: string, root = warehouseRoot()): string {
+export function sessionsStoreRoot(warehouse = warehouseRoot()): string {
+  const explicit = String(process.env.PI_WEB_SESSIONS_ROOT || "").trim();
+  if (explicit) return resolvePath(explicit);
+  return resolvePath(warehouse || "", ".agent", "sessions");
+}
+
+export function scopedSessionsDir(admin: string, warehouse = warehouseRoot()): string {
   const name = sanitizeWebAdmin(admin) || NO_ADMIN_LEAF;
-  return resolvePath(root, ".agent", "sessions", name, "pi");
+  return resolvePath(sessionsStoreRoot(warehouse), name, "pi");
 }
 
 /** Sync: ALS admin, or `_no_admin` when the warehouse is set. Tests without a warehouse stay undefined. */

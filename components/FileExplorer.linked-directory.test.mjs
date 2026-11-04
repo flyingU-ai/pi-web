@@ -74,6 +74,12 @@ test("allowing a link sends the target the operator was shown", () => {
   assert.match(source, /if \(next && !loaded && !pendingLinkTarget\) loadChildren\(\);/);
 });
 
+test("DatePool explorer does not git-scan the warehouse root", () => {
+  assert.match(source, /const gitCwd = selected.startsWith\(codePrefix\) \? selected : ""/);
+  assert.match(source, /sidebar\.adminRequired/);
+  assert.doesNotMatch(source, /fetchGitStatus\(cwd\)/);
+});
+
 test("a link that encloses the project or home folder warns and confirms before allowing", () => {
   const html = renderNode({ ...linkedNode, outsideLinkTarget: "/", outsideLinkEncloses: true });
   assert.match(html, /That folder contains this project or your home folder\./);

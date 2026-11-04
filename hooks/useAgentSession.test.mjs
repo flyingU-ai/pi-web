@@ -182,7 +182,7 @@ test("only the session-mount load probes disk for external appends", () => {
   assert.match(loadSessionSource, /options\?: \{ force\?: boolean \}/);
   assert.match(loadSessionSource, /if \(options\?\.force\) params\.set\("force", "1"\)/);
   assert.match(loadSessionSource, /d\.wrapperRebuilt[\s\S]*?eventConnectionRef\.current\?\.close\(\)[\s\S]*?maintain\(sid\)/);
-  assert.match(mountSource, /loadSession\(session\.id, !cached, true, \{ force: !cached \}\)/);
+  assert.match(mountSource, /loadSession\(session\.id, false, true, \{ force: !cached \}\)/);
   assert.match(source, /await loadSession\(sid\)/);
   assert.equal([...source.matchAll(/\{ force: true \}/g)].length, 0);
 });
@@ -518,8 +518,36 @@ test("reconnects active shell output to its streaming tool call", () => {
   assert.match(updateSource, /setActiveToolResults/);
   assert.match(updateSource, /content,/);
   assert.match(endSource, /setActiveToolResults[\s\S]*next\.delete\(id\)/);
+  assert.match(endSource, /setToolStartedAt[\s\S]*next\.delete\(id\)/);
   assert.match(chatWindowSource, /const map = new Map\(activeToolResults\)/);
-  assert.match(chatWindowSource, /<MessageView message=\{streamState\.streamingMessage as AgentMessage\} toolResults=\{toolResultsMap\}/);
+  assert.match(chatWindowSource, /<MessageView message=\{streamState\.streamingMessage as AgentMessage\} toolResults=\{toolResultsMap\} toolStartedAt=\{toolStartedAt\}/);
+});
+
+test("refresh paints persisted history before includeState and RPC bind", () => {
+  const mountSource = source.slice(
+    source.indexOf("// Load session on mount"),
+    source.indexOf("loadSession(session.id, false, true"),
+  );
+  assert.match(mountSource, /const cached = getSessionViewSnapshot\(session\.id\)/);
+  assert.match(mountSource, /setMessages\(cached\.messages\)/);
+  assert.match(mountSource, /setLoading\(false\)/);
+  assert.match(source, /loadSession\(session\.id, false, true, \{ force: !cached \}\)/);
+  assert.match(source, /if \(showLoading\) setLoading\(false\);\s*if \(!includeState\) return null;/);
+});
+
+test("starts the tool-row clock on execution start and clears it when the session settles", () => {
+  const startSource = source.slice(
+    source.indexOf('case "tool_execution_start"'),
+    source.indexOf('case "tool_execution_update"'),
+  );
+  const settleSource = source.slice(
+    source.indexOf("const settleUiStage = useCallback"),
+    source.indexOf("const notifyPromptStage"),
+  );
+  assert.match(startSource, /setToolStartedAt/);
+  assert.match(startSource, /next\.set\(id, Date\.now\(\)\)/);
+  assert.match(settleSource, /setToolStartedAt\(new Map\(\)\)/);
+  assert.doesNotMatch(source, /setWorkingMessage: \(/);
 });
 
 test("reports a running script's newest call as its progress", () => {

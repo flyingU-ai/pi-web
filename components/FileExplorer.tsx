@@ -84,21 +84,30 @@ async function responseError(res: Response, fallback: string): Promise<Error> {
   return new Error(message);
 }
 
-async function fetchEntries(dirPath: string): Promise<FileNode[]> {
+type CodeMountHint = { ok: boolean; reason?: string };
+
+async function fetchList(dirPath: string): Promise<{ nodes: FileNode[]; codeMount?: CodeMountHint }> {
   const encoded = encodeFilePathForApi(dirPath);
   const res = await fetch(`/api/files/${encoded}?type=list`);
   if (!res.ok) throw await responseError(res, "Failed to load files");
-  const data = await res.json() as { entries?: FileEntry[] };
-  return (data.entries ?? []).map((e) => ({
-    name: e.name,
-    fullPath: joinFilePath(dirPath, e.name),
-    isDir: e.isDir,
-    size: e.size,
-    children: e.isDir ? [] : undefined,
-    loaded: !e.isDir,
-    outsideLinkTarget: e.outsideLinkTarget,
-    outsideLinkEncloses: e.outsideLinkEncloses,
-  }));
+  const data = await res.json() as { entries?: FileEntry[]; codeMount?: CodeMountHint };
+  return {
+    nodes: (data.entries ?? []).map((e) => ({
+      name: e.name,
+      fullPath: joinFilePath(dirPath, e.name),
+      isDir: e.isDir,
+      size: e.size,
+      children: e.isDir ? [] : undefined,
+      loaded: !e.isDir,
+      outsideLinkTarget: e.outsideLinkTarget,
+      outsideLinkEncloses: e.outsideLinkEncloses,
+    })),
+    codeMount: data.codeMount,
+  };
+}
+
+async function fetchEntries(dirPath: string): Promise<FileNode[]> {
+  return (await fetchList(dirPath)).nodes;
 }
 
 // Sends the target the operator was shown, so a link pointed elsewhere since
@@ -723,6 +732,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const [roots, setRoots] = useState<FileNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [codeMountHint, setCodeMountHint] = useState<CodeMountHint | null>(null);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [selectedDir, setSelectedDir] = useState(cwd);
   const [codeChildren, setCodeChildren] = useState<FileNode[]>([]);
@@ -1069,8 +1079,12 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     setLoading(cwdChanged);
     setError(null);
     let cancelled = false;
-    fetchEntries(cwd)
-      .then((entries) => { if (!cancelled) setRoots(entries); })
+    fetchList(cwd)
+      .then((listed) => {
+        if (cancelled) return;
+        setRoots(listed.nodes);
+        setCodeMountHint(listed.codeMount ?? null);
+      })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -1078,7 +1092,16 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 
   useEffect(() => {
     let cancelled = false;
-    fetchGitStatus(cwd)
+    const root = normalizeFilePathSlashes(cwd).replace(/\/+$/, "");
+    const selected = normalizeFilePathSlashes(selectedDir).replace(/\/+$/, "");
+    const codePrefix = `${root}/code/`;
+    const gitCwd = selected.startsWith(codePrefix) ? selected : "";
+    if (!gitCwd) {
+      setGitFiles([]);
+      setGitLineStats({ additions: 0, deletions: 0 });
+      return;
+    }
+    fetchGitStatus(gitCwd)
       .then((status) => {
         if (!cancelled) {
           setGitFiles(status.isGitRepository ? status.files : []);
@@ -1094,7 +1117,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
         }
       });
     return () => { cancelled = true; };
-  }, [cwd, refreshKey, treeRefreshKey]);
+  }, [cwd, selectedDir, refreshKey, treeRefreshKey]);
 
   useEffect(() => {
     onChangesCountChange?.(gitFiles.length);
@@ -1338,6 +1361,13 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
             <div style={{ padding: "8px 12px", fontSize: 11, color: "#f87171" }}>{error}</div>
           ) : (
             <>
+              {codeMountHint && !codeMountHint.ok ? (
+                <div style={{ padding: "8px 10px", marginBottom: 6, fontSize: 11, color: "#b45309", border: "1px solid color-mix(in srgb, #f59e0b 35%, var(--border))", borderRadius: 6 }}>
+                  {codeMountHint.reason === "blocked_by_real_code_dir"
+                    ? t("files.codeBlockedByRealDir")
+                    : t("sidebar.adminRequired")}
+                </div>
+              ) : null}
               {codeNode ? (
                 <div
                   style={{
