@@ -726,7 +726,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
 
       messagesLoaded = true;
-      if (showLoading) setLoading(false);
+      setLoading(false);
       if (!includeState) return null;
 
       try {
@@ -758,7 +758,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setError(String(e));
       return "error";
     } finally {
-      if (showLoading && !messagesLoaded) setLoading(false);
+      // Always clear: mount starts loading=true for existing sessions, but the
+      // background read uses showLoading=false. Leaving it set sticks Chat on
+      // "Loading session..." until the operator switches away and back.
+      if (!messagesLoaded) setLoading(false);
     }
     })();
     if (!options?.force) loadFlightsRef.current.set(flightKey, flight);

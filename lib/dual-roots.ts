@@ -110,6 +110,8 @@ function safeAdminDir(admin: string): string {
 }
 
 export function termWorkspacesRoot(): string {
+  // Prefer a host-local disk. DatePool NFS is only the fallback when lab
+  // did not export PI_WEB_TERM_WS_ROOT (default /home/aoi/session-private/term-ws).
   if (process.env.PI_WEB_TERM_WS_ROOT) return process.env.PI_WEB_TERM_WS_ROOT;
   const warehouse = warehouseRoot();
   if (warehouse) return join(warehouse, ".agent", "term-ws");

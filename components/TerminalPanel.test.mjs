@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import { setImmediate } from "node:timers/promises";
 import { createTerminalWriter, terminalRequest } from "../lib/terminal-client.ts";
 
@@ -69,6 +70,12 @@ test("typing during a slow request is batched into the next ordered write", asyn
   await setImmediate();
   assert.deepEqual(received, ["first", "a long command\r"]);
   await writer.stop();
+});
+
+test("a restored tab recreates the same id when the server lease is gone", async () => {
+  const source = await readFile(new URL("./TerminalPanel.tsx", import.meta.url), "utf8");
+  assert.match(source, /Tab is still open: recreate the same id\/cwd/);
+  assert.match(source, /await createShell\(\);/);
 });
 
 test("failed or stopped delivery discards queued input without retrying commands", async (t) => {

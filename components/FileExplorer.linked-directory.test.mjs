@@ -78,6 +78,8 @@ test("DatePool explorer does not git-scan the warehouse root", () => {
   assert.match(source, /const gitCwd = selected.startsWith\(codePrefix\) \? selected : ""/);
   assert.match(source, /sidebar\.adminRequired/);
   assert.doesNotMatch(source, /fetchGitStatus\(cwd\)/);
+  assert.match(source, /if \(!changesCollapsed\) \{\s*run\(\);/);
+  assert.match(source, /window\.setTimeout\(run, 400\)/);
 });
 
 test("a link that encloses the project or home folder warns and confirms before allowing", () => {

@@ -1101,23 +1101,37 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       setGitLineStats({ additions: 0, deletions: 0 });
       return;
     }
-    fetchGitStatus(gitCwd)
-      .then((status) => {
-        if (!cancelled) {
-          setGitFiles(status.isGitRepository ? status.files : []);
-          setGitLineStats(status.isGitRepository
-            ? { additions: status.additions, deletions: status.deletions }
-            : { additions: 0, deletions: 0 });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setGitFiles([]);
-          setGitLineStats({ additions: 0, deletions: 0 });
-        }
-      });
-    return () => { cancelled = true; };
-  }, [cwd, selectedDir, refreshKey, treeRefreshKey]);
+    const run = () => {
+      if (cancelled) return;
+      fetchGitStatus(gitCwd)
+        .then((status) => {
+          if (!cancelled) {
+            setGitFiles(status.isGitRepository ? status.files : []);
+            setGitLineStats(status.isGitRepository
+              ? { additions: status.additions, deletions: status.deletions }
+              : { additions: 0, deletions: 0 });
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setGitFiles([]);
+            setGitLineStats({ additions: 0, deletions: 0 });
+          }
+        });
+    };
+    // Opening code/promptDet must list the tree first. Forest git on that
+    // folder (many child repos) starves listdir; wait until Changes is open
+    // or the tree has had a beat to render.
+    if (!changesCollapsed) {
+      run();
+      return () => { cancelled = true; };
+    }
+    const timer = window.setTimeout(run, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [cwd, selectedDir, refreshKey, treeRefreshKey, changesCollapsed]);
 
   useEffect(() => {
     onChangesCountChange?.(gitFiles.length);

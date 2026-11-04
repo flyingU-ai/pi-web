@@ -532,7 +532,9 @@ test("refresh paints persisted history before includeState and RPC bind", () => 
   assert.match(mountSource, /setMessages\(cached\.messages\)/);
   assert.match(mountSource, /setLoading\(false\)/);
   assert.match(source, /loadSession\(session\.id, false, true, \{ force: !cached \}\)/);
-  assert.match(source, /if \(showLoading\) setLoading\(false\);\s*if \(!includeState\) return null;/);
+  assert.match(chatWindowSource, /if \(loading && messages\.length === 0\)/);
+  assert.match(source, /setLoading\(false\);\s*if \(!includeState\) return null;/);
+  assert.match(source, /if \(!messagesLoaded\) setLoading\(false\)/);
 });
 
 test("starts the tool-row clock on execution start and clears it when the session settles", () => {

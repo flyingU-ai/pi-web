@@ -131,17 +131,22 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError }
       };
     };
 
+    const createShell = () => terminalRequest("/api/terminal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, cwd, cols: terminal.cols, rows: terminal.rows }),
+    });
     startRef.current = (async () => {
       fitAndResize();
       if (restored || reconnectKey > 0) {
-        // Restoring a tab must never silently launch a replacement shell.
-        await terminalRequest(`/api/terminal/${encodeURIComponent(id)}`);
+        try {
+          await terminalRequest(`/api/terminal/${encodeURIComponent(id)}`);
+        } catch {
+          // Tab is still open: recreate the same id/cwd instead of forcing a full page refresh.
+          await createShell();
+        }
       } else {
-        await terminalRequest("/api/terminal", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id, cwd, cols: terminal.cols, rows: terminal.rows }),
-        });
+        await createShell();
       }
       connect();
     })().catch((reason: Error) => {

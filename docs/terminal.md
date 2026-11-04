@@ -11,11 +11,12 @@ mounted behind inactive tabs, hidden panels, and session or project switches.
   the same ID and cwd is idempotent, including React Strict Mode's repeated
   effects. An existing ID cannot be reused for another cwd.
 - `sessionStorage` retains terminal IDs, cwds, and the active terminal layout
-  across refresh. Restored tabs first check the existing server instance and
-  never silently start replacement processes after expiry or server restart.
-- A new PTY gets a 120-second connection lease. Subscribing cancels expiry;
-  the last subscriber leaving starts a new 120-second grace period. This also
-  collects creations that never establish their initial connection.
+  across refresh. Restored tabs first check the existing server instance; if
+  that PTY is gone they recreate the same id and cwd so the operator does not
+  have to refresh the page.
+- A new PTY that never gets a subscriber expires after 120 seconds. After the
+  first subscriber, hiding a panel only disconnects SSE; the shell stays for
+  30 minutes after the last subscriber leaves. Subscribing cancels expiry.
 - Hiding a panel, switching tabs, and unmounting a component only disconnect
   clients. Explicitly terminating a tab waits for creation and in-flight input
   before deleting the PTY. Restart waits for termination before creating a new

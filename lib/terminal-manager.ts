@@ -18,6 +18,7 @@ interface TerminalRecord {
   offset: number;
   exited: boolean;
   exitCode: number | null;
+  claimed: boolean;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -27,7 +28,28 @@ declare global {
 
 // ponytail: bounded replay; use terminal serialization if full-screen snapshots become necessary.
 const MAX_BACKLOG = 128 * 1024;
-export const TERMINAL_RECONNECT_MS = 120_000;
+/** Creations that never get an SSE subscriber (Strict Mode / dropped POST). */
+export const TERMINAL_UNCLAIMED_MS = 120_000;
+/** After the last subscriber leaves, keep the PTY so hiding a panel does not kill the shell. */
+export const TERMINAL_RECONNECT_MS = 1_800_000;
+
+const KEEP_SHELL_KEYS = new Set([
+  "HOME", "USER", "LOGNAME", "SHELL", "TZ", "DISPLAY", "SSH_AUTH_SOCK", "XDG_RUNTIME_DIR",
+]);
+
+function isLocaleKey(key: string): boolean {
+  const upper = key.toUpperCase();
+  return upper === "LANG" || upper.startsWith("LC_");
+}
+
+function labPath(raw: string | undefined): string {
+  const extras = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"];
+  const inherited = (raw ?? "").split(":").filter((part) => {
+    const low = part.toLowerCase();
+    return part && !low.includes("conda") && !low.includes("miniconda") && !low.includes("anaconda") && !low.includes("mamba");
+  });
+  return [...new Set([...inherited, ...extras, `${homedir()}/.local/bin`])].join(":");
+}
 
 function registry(): Map<string, TerminalRecord> {
   if (!globalThis.__piWebTerminals) {
@@ -45,12 +67,19 @@ function registry(): Map<string, TerminalRecord> {
 function shellEnvironment(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    // The browser login password guards this server, not the shells it starts.
+    if (value === undefined) continue;
     const comparableKey = process.platform === "win32" ? key.toUpperCase() : key;
-    if (value !== undefined && comparableKey !== "PI_WEB_PASSWORD") env[key] = value;
+    // The browser login password guards this server, not the shells it starts.
+    if (comparableKey === "PI_WEB_PASSWORD") continue;
+    if (KEEP_SHELL_KEYS.has(key) || KEEP_SHELL_KEYS.has(comparableKey) || isLocaleKey(key)) {
+      env[key] = value;
+    }
   }
   env.TERM = "xterm-256color";
   env.COLORTERM = "truecolor";
+  env.PS1 = env.PS1 ?? "\\u@\\h:\\w\\$ ";
+  env.PATH = labPath(process.env.PATH);
+  env.CONDA_NO_PLUGINS = "true";
   // Windows shells (Git Bash / MSYS2, cmd, PowerShell) otherwise inherit the
   // system ANSI codepage (e.g. GBK on zh-CN) and mangle non-ASCII filenames.
   if (!process.env.LANG && !process.env.LC_ALL && !process.env.LC_CTYPE) env.LANG = "C.UTF-8";
@@ -63,7 +92,8 @@ function emit(record: TerminalRecord, event: TerminalEvent): void {
 
 function scheduleCleanup(id: string, record: TerminalRecord): void {
   if (record.cleanupTimer || record.listeners.size || registry().get(id) !== record) return;
-  record.cleanupTimer = setTimeout(() => killTerminal(id), TERMINAL_RECONNECT_MS);
+  const delay = record.claimed ? TERMINAL_RECONNECT_MS : TERMINAL_UNCLAIMED_MS;
+  record.cleanupTimer = setTimeout(() => killTerminal(id), delay);
   record.cleanupTimer.unref?.();
 }
 
@@ -94,8 +124,8 @@ export function createTerminal(cwd: string, cols: number, rows: number, id: stri
   }
   const shell = process.platform === "win32"
     ? process.env.ComSpec ?? "cmd.exe"
-    : process.env.SHELL || "/bin/sh";
-  const args = process.platform === "win32" ? [] : ["-l"];
+    : "/bin/bash";
+  const args = process.platform === "win32" ? [] : ["--noprofile", "--norc"];
   const pty = spawn(shell, args, {
     name: "xterm-256color",
     cols: dimension(cols, 80),
@@ -111,6 +141,7 @@ export function createTerminal(cwd: string, cols: number, rows: number, id: stri
     offset: 0,
     exited: false,
     exitCode: null,
+    claimed: false,
     cleanupTimer: null,
   };
   registry().set(id, record);
@@ -148,6 +179,7 @@ export function subscribeTerminal(
 ): { output: Extract<TerminalEvent, { type: "output" }>; exited: boolean; exitCode: number | null; unsubscribe: () => void } | null {
   const record = registry().get(id);
   if (!record) return null;
+  record.claimed = true;
   record.listeners.add(listener);
   if (record.cleanupTimer) clearTimeout(record.cleanupTimer);
   record.cleanupTimer = null;
