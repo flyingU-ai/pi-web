@@ -79,7 +79,8 @@ test("DatePool explorer does not git-scan the warehouse root", () => {
   assert.match(source, /sidebar\.adminRequired/);
   assert.doesNotMatch(source, /fetchGitStatus\(cwd\)/);
   assert.match(source, /if \(!changesCollapsed\) \{\s*run\(\);/);
-  assert.match(source, /window\.setTimeout\(run, 400\)/);
+  assert.doesNotMatch(source, /window\.setTimeout\(run, 400\)/);
+  assert.match(source, /onGitScopeChange\?\.\(nextScope\)/);
 });
 
 test("a link that encloses the project or home folder warns and confirms before allowing", () => {

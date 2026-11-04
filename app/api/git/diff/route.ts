@@ -5,7 +5,7 @@ import { gitCwdForPath, resolveDualRootPath } from "@/lib/dual-roots";
 import { denyCrossAdminPath, getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed, isWindowsAbsolutePath } from "@/lib/file-access";
 import { getGitFileDiff } from "@/lib/git-changes";
 import { hasParentDirectorySegment } from "@/lib/path-security";
-import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
+import { adminFromRequest, resolveCurrentAdminAsync, withWebAdmin } from "@/lib/web-admin-scope";
 
 function isDiffPathAllowed(filePath: string, allowedRoots: Set<string>): boolean {
   if (hasParentDirectorySegment(filePath)) return false;
@@ -27,6 +27,10 @@ function isDiffPathAllowed(filePath: string, allowedRoots: Set<string>): boolean
 }
 
 export async function GET(request: NextRequest) {
+  return withWebAdmin(request, () => getGitDiffResponse(request));
+}
+
+async function getGitDiffResponse(request: NextRequest) {
   try {
     const cwd = request.nextUrl.searchParams.get("cwd")?.trim() ?? "";
     const filePath = request.nextUrl.searchParams.get("path")?.trim() ?? "";

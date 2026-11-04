@@ -35,8 +35,21 @@ async function findRepositoryRoot(cwd: string): Promise<string | null> {
   }
 }
 
+/** Extra mounts under `code/` are zone symlinks; git reports the real toplevel. */
+export function realPathOrSelf(filePath: string): string {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    try {
+      return path.join(fs.realpathSync(path.dirname(filePath)), path.basename(filePath));
+    } catch {
+      return path.resolve(filePath);
+    }
+  }
+}
+
 function isWithinPath(parent: string, target: string): boolean {
-  const relative = path.relative(path.resolve(parent), path.resolve(target));
+  const relative = path.relative(realPathOrSelf(parent), realPathOrSelf(target));
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
@@ -130,7 +143,8 @@ export async function getGitStatusForest(cwd: string): Promise<GitStatusResponse
 }
 
 export async function getGitStatus(cwd: string): Promise<GitStatusResponse> {
-  const repositoryRoot = await findRepositoryRoot(cwd);
+  const scopedCwd = realPathOrSelf(cwd);
+  const repositoryRoot = await findRepositoryRoot(scopedCwd);
   if (!repositoryRoot) {
     return {
       isGitRepository: false,
@@ -143,11 +157,11 @@ export async function getGitStatus(cwd: string): Promise<GitStatusResponse> {
 
   const [entries, trackedLineStats] = await Promise.all([
     readStatusEntries(repositoryRoot),
-    readTrackedLineStats(repositoryRoot, cwd),
+    readTrackedLineStats(repositoryRoot, scopedCwd),
   ]);
   const files = entries.flatMap((entry): GitFileStatus[] => {
     const filePath = path.resolve(repositoryRoot, entry.path);
-    if (!isWithinPath(cwd, filePath)) return [];
+    if (!isWithinPath(scopedCwd, filePath)) return [];
     const classified = classifyGitStatus(entry);
     return [{
       filePath,
@@ -216,10 +230,11 @@ async function createTrackedFilePatch(
 }
 
 export async function getGitFileDiff(cwd: string, filePath: string): Promise<GitFileDiffResponse> {
-  const repositoryRoot = await findRepositoryRoot(cwd);
-  if (!repositoryRoot || !isWithinPath(repositoryRoot, filePath)) return { supported: false };
+  const scopedCwd = realPathOrSelf(cwd);
+  const resolvedFilePath = realPathOrSelf(filePath);
+  const repositoryRoot = await findRepositoryRoot(scopedCwd);
+  if (!repositoryRoot || !isWithinPath(repositoryRoot, resolvedFilePath)) return { supported: false };
 
-  const resolvedFilePath = path.resolve(filePath);
   const relativePath = toGitPath(path.relative(repositoryRoot, resolvedFilePath));
   const entries = await readStatusEntries(repositoryRoot);
   const entry = entries.find((candidate) => candidate.path === relativePath);

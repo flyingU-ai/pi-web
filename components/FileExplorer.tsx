@@ -50,6 +50,7 @@ interface Props {
   onUploadBusyChange?: (busy: boolean) => void;
   changesCollapsed: boolean;
   onChangesCountChange?: (count: number) => void;
+  onGitScopeChange?: (active: boolean) => void;
   fileSearchOpen?: boolean;
   onFileSearchOpenChange?: (open: boolean) => void;
   onUploadDirChange?: (dir: string) => void;
@@ -724,6 +725,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   onUploadBusyChange,
   changesCollapsed,
   onChangesCountChange,
+  onGitScopeChange,
   fileSearchOpen = false,
   onFileSearchOpenChange,
   onUploadDirChange,
@@ -742,6 +744,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const [highlightedPaths, setHighlightedPaths] = useState<Set<string>>(new Set());
   const [gitFiles, setGitFiles] = useState<GitFileStatus[]>([]);
   const [gitLineStats, setGitLineStats] = useState({ additions: 0, deletions: 0 });
+  const [gitScopeActive, setGitScopeActive] = useState(false);
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>("idle");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -1096,6 +1099,9 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     const selected = normalizeFilePathSlashes(selectedDir).replace(/\/+$/, "");
     const codePrefix = `${root}/code/`;
     const gitCwd = selected.startsWith(codePrefix) ? selected : "";
+    const nextScope = selected === `${root}/code` || Boolean(gitCwd);
+    setGitScopeActive(nextScope);
+    onGitScopeChange?.(nextScope);
     if (!gitCwd) {
       setGitFiles([]);
       setGitLineStats({ additions: 0, deletions: 0 });
@@ -1119,19 +1125,14 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
           }
         });
     };
-    // Opening code/promptDet must list the tree first. Forest git on that
-    // folder (many child repos) starves listdir; wait until Changes is open
-    // or the tree has had a beat to render.
+    // Folder-of-repos (code/promptDet) can list 1000+ dirty files. Only scan
+    // when Changes is open so browsing the tree stays O(listdir).
     if (!changesCollapsed) {
       run();
       return () => { cancelled = true; };
     }
-    const timer = window.setTimeout(run, 400);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [cwd, selectedDir, refreshKey, treeRefreshKey, changesCollapsed]);
+    return () => { cancelled = true; };
+  }, [cwd, selectedDir, refreshKey, treeRefreshKey, changesCollapsed, onGitScopeChange]);
 
   useEffect(() => {
     onChangesCountChange?.(gitFiles.length);
@@ -1336,6 +1337,12 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
           </div>
         )}
       </div>
+      )}
+
+      {!changesCollapsed && gitScopeActive && gitFiles.length === 0 && (
+        <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>
+          {t("i18n.noChanges")}
+        </div>
       )}
 
       {!changesCollapsed && gitFiles.length > 0 && (

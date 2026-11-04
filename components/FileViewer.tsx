@@ -1349,11 +1349,18 @@ function TextFileViewer({
   // Wait for the git request before restoring diff mode so the unresolved
   // placeholder cannot immediately demote it back to source.
   useEffect(() => {
-    if (requestedInitialDisplayMode === "diff" && hasGitDiff && !autoDiffAppliedRef.current) {
-      autoDiffAppliedRef.current = true;
-      updateDisplayMode("diff");
-    }
-  }, [requestedInitialDisplayMode, hasGitDiff, updateDisplayMode]);
+    if (!hasGitDiff || autoDiffAppliedRef.current) return;
+    const preferDiff = requestedInitialDisplayMode === "diff"
+      || (
+        defaultPreviewEligibleRef.current
+        && requestedInitialDisplayMode !== "preview"
+        && data?.language !== "markdown"
+        && data?.language !== "html"
+      );
+    if (!preferDiff) return;
+    autoDiffAppliedRef.current = true;
+    updateDisplayMode("diff");
+  }, [requestedInitialDisplayMode, hasGitDiff, updateDisplayMode, data?.language]);
 
   const markdownPreview = useMemo(
     () => (data?.language === "markdown" ? normalizeDisplayMath(data.content) : ""),

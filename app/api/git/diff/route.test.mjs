@@ -124,6 +124,44 @@ test("preserves deleted tracked diffs with existing or missing parents", async (
   }
 });
 
+test("virtual code extra-mount path returns a patch through the zone symlink", async () => {
+  const tmp = fs.mkdtempSync(path.join(base, "virtual-"));
+  const warehouse = path.join(tmp, "AgentSMarkDatePoolv2");
+  const extra = path.join(tmp, "promptDet");
+  fs.mkdirSync(path.join(warehouse, "smt_wh"), { recursive: true });
+  fs.mkdirSync(extra, { recursive: true });
+  git(extra, "init", "--quiet");
+  const tracked = path.join(extra, "tracked.py");
+  fs.writeFileSync(tracked, "original\n");
+  git(extra, "add", ".");
+  git(extra, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "base");
+  fs.writeFileSync(tracked, "updated\n");
+
+  const prevRoot = process.env.ANNOTATION_WORKSPACE_ROOT;
+  const prevMounts = process.env.PI_WEB_ADMIN_WORKSPACES;
+  process.env.ANNOTATION_WORKSPACE_ROOT = warehouse;
+  process.env.PI_WEB_ADMIN_WORKSPACES = JSON.stringify({ flyingu: extra });
+  allowFileRoot(warehouse);
+  allowFileRoot(extra);
+  try {
+    const virtualFile = path.join(warehouse, "code", "promptDet", "tracked.py");
+    const response = await GET(new NextRequest(
+      `http://localhost/api/git/diff?cwd=${encodeURIComponent(warehouse)}&path=${encodeURIComponent(virtualFile)}`,
+      { headers: { "x-aoi-admin": "flyingu" } },
+    ));
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.supported, true);
+    assert.equal(result.status, "modified");
+    assert.ok(result.patch.includes("+updated"));
+  } finally {
+    if (prevRoot === undefined) delete process.env.ANNOTATION_WORKSPACE_ROOT;
+    else process.env.ANNOTATION_WORKSPACE_ROOT = prevRoot;
+    if (prevMounts === undefined) delete process.env.PI_WEB_ADMIN_WORKSPACES;
+    else process.env.PI_WEB_ADMIN_WORKSPACES = prevMounts;
+  }
+});
+
 test("rejects parent traversal and keeps an absent untracked path unsupported", async () => {
   const root = fixture();
   const response = await request(root, `${root}${path.sep}unused${path.sep}..${path.sep}missing.txt`);
