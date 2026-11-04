@@ -43,11 +43,10 @@ function isLocaleKey(key: string): boolean {
 }
 
 function labPath(raw: string | undefined): string {
+  // Keep the process PATH (lab already prepends agentSMark/bin). Login hooks,
+  // not PATH, were what dumped conda plugin noise.
   const extras = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"];
-  const inherited = (raw ?? "").split(":").filter((part) => {
-    const low = part.toLowerCase();
-    return part && !low.includes("conda") && !low.includes("miniconda") && !low.includes("anaconda") && !low.includes("mamba");
-  });
+  const inherited = (raw ?? "").split(":").filter(Boolean);
   return [...new Set([...inherited, ...extras, `${homedir()}/.local/bin`])].join(":");
 }
 
