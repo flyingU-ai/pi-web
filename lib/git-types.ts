@@ -14,12 +14,16 @@ export interface GitFileStatus {
   worktreeStatus: string;
 }
 
+export type GitScanReason = "nested_repos";
+
 export interface GitStatusResponse {
   isGitRepository: boolean;
   repositoryRoot: string | null;
   files: GitFileStatus[];
   additions: number;
   deletions: number;
+  /** Extra mount is a folder of repos; the client should open a child instead of unioning them. */
+  scanReason?: GitScanReason;
 }
 
 export interface GitFileDiffResponse {

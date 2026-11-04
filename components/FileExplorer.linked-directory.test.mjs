@@ -81,6 +81,10 @@ test("DatePool explorer does not git-scan the warehouse root", () => {
   assert.match(source, /if \(!changesCollapsed\) \{\s*run\(\);/);
   assert.doesNotMatch(source, /window\.setTimeout\(run, 400\)/);
   assert.match(source, /onGitScopeChange\?\.\(nextScope\)/);
+  assert.match(source, /adminFetchInit/);
+  assert.match(source, /GIT_STATUS_TIMEOUT_MS = 12_000/);
+  assert.match(source, /setGitError/);
+  assert.match(source, /files\.gitOpenNestedRepo/);
 });
 
 test("a link that encloses the project or home folder warns and confirms before allowing", () => {

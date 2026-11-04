@@ -44,7 +44,7 @@ async function getGitDiffResponse(request: NextRequest) {
     const admin = (await resolveCurrentAdminAsync()) || adminFromRequest(request);
     const gitCwd = gitCwdForPath(filePath || cwd, admin);
     const gitPath = resolveDualRootPath(filePath, admin);
-    const allowedRoots = await getAllowedFileRoots();
+    const allowedRoots = await getAllowedFileRoots(admin);
     if (denyCrossAdminPath(cwd, admin) || denyCrossAdminPath(filePath, admin) || denyCrossAdminPath(gitPath, admin)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }

@@ -71,3 +71,8 @@ test("markdown preview links carry PDF page fragments", () => {
   assert.match(source, /parsePdfPageFragment/);
   assert.match(source, /onOpenFile\(linkedFile, parsePdfPageFragment\(href\) \?\? undefined\)/);
 });
+
+test("git diff fetch carries the iframe admin header independently of Changes", () => {
+  assert.match(source, /adminFetchInit/);
+  assert.match(source, /\/api\/git\/diff/);
+});

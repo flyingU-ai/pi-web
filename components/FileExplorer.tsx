@@ -13,6 +13,7 @@ import {
   uploadDirFromSelection,
 } from "@/lib/file-paths";
 import type { GitFileStatus, GitFileStatusKind, GitStatusResponse } from "@/lib/git-types";
+import { adminFetchInit } from "@/lib/web-admin-client";
 import type { FileIndexEntry } from "@/lib/file-fuzzy";
 import { uploadFiles, type UploadConflictStrategy, type UploadError, type UploadResponse } from "@/lib/file-upload-client";
 import { buildSearchTree, type SearchTreeNode } from "@/lib/search-tree";
@@ -132,10 +133,21 @@ async function allowOutsideLink(linkPath: string, target: string): Promise<void>
   if (!res.ok) throw await responseError(res, "Failed to allow the linked folder");
 }
 
-async function fetchGitStatus(cwd: string): Promise<GitStatusResponse> {
+const GIT_STATUS_TIMEOUT_MS = 12_000;
+
+async function fetchGitStatus(cwd: string, signal?: AbortSignal): Promise<GitStatusResponse> {
   const params = new URLSearchParams({ cwd });
-  const res = await fetch(`/api/git/status?${params.toString()}`);
-  if (!res.ok) throw new Error(`Failed to load Git status (HTTP ${res.status})`);
+  const res = await fetch(`/api/git/status?${params.toString()}`, adminFetchInit({ signal }));
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const data = await res.json() as { error?: string };
+      if (data.error) detail = data.error;
+    } catch {
+      // Keep the status code when the body is not JSON.
+    }
+    throw new Error(detail);
+  }
   return res.json() as Promise<GitStatusResponse>;
 }
 
@@ -745,6 +757,10 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const [gitFiles, setGitFiles] = useState<GitFileStatus[]>([]);
   const [gitLineStats, setGitLineStats] = useState({ additions: 0, deletions: 0 });
   const [gitScopeActive, setGitScopeActive] = useState(false);
+  const [gitLoading, setGitLoading] = useState(false);
+  const [gitError, setGitError] = useState<string | null>(null);
+  const [gitScanPath, setGitScanPath] = useState("");
+  const [gitNestedHint, setGitNestedHint] = useState(false);
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>("idle");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -1102,37 +1118,70 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     const nextScope = selected === `${root}/code` || Boolean(gitCwd);
     setGitScopeActive(nextScope);
     onGitScopeChange?.(nextScope);
-    if (!gitCwd) {
+    const clearGit = () => {
       setGitFiles([]);
       setGitLineStats({ additions: 0, deletions: 0 });
+      setGitError(null);
+      setGitNestedHint(false);
+      setGitLoading(false);
+    };
+    if (!gitCwd) {
+      setGitScanPath("");
+      clearGit();
       return;
     }
+    setGitScanPath(gitCwd);
+    setGitFiles([]);
+    setGitLineStats({ additions: 0, deletions: 0 });
+    setGitError(null);
+    setGitNestedHint(false);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort("timeout"), GIT_STATUS_TIMEOUT_MS);
     const run = () => {
       if (cancelled) return;
-      fetchGitStatus(gitCwd)
+      setGitLoading(true);
+      fetchGitStatus(gitCwd, controller.signal)
         .then((status) => {
-          if (!cancelled) {
-            setGitFiles(status.isGitRepository ? status.files : []);
-            setGitLineStats(status.isGitRepository
-              ? { additions: status.additions, deletions: status.deletions }
-              : { additions: 0, deletions: 0 });
-          }
+          if (cancelled) return;
+          const nested = !status.isGitRepository && status.scanReason === "nested_repos";
+          setGitNestedHint(nested);
+          setGitFiles(status.isGitRepository ? status.files : []);
+          setGitLineStats(status.isGitRepository
+            ? { additions: status.additions, deletions: status.deletions }
+            : { additions: 0, deletions: 0 });
+          setGitError(null);
         })
-        .catch(() => {
-          if (!cancelled) {
-            setGitFiles([]);
-            setGitLineStats({ additions: 0, deletions: 0 });
-          }
+        .catch((error) => {
+          if (cancelled) return;
+          setGitFiles([]);
+          setGitLineStats({ additions: 0, deletions: 0 });
+          setGitNestedHint(false);
+          const timedOut = controller.signal.aborted;
+          setGitError(timedOut
+            ? t("files.gitScanTimeout")
+            : (error instanceof Error ? error.message : String(error)));
+        })
+        .finally(() => {
+          if (!cancelled) setGitLoading(false);
         });
     };
     // Folder-of-repos (code/promptDet) can list 1000+ dirty files. Only scan
     // when Changes is open so browsing the tree stays O(listdir).
     if (!changesCollapsed) {
       run();
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+        controller.abort();
+        window.clearTimeout(timeout);
+      };
     }
-    return () => { cancelled = true; };
-  }, [cwd, selectedDir, refreshKey, treeRefreshKey, changesCollapsed, onGitScopeChange]);
+    setGitLoading(false);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [cwd, selectedDir, refreshKey, treeRefreshKey, changesCollapsed, onGitScopeChange, t]);
 
   useEffect(() => {
     onChangesCountChange?.(gitFiles.length);
@@ -1340,8 +1389,14 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       )}
 
       {!changesCollapsed && gitScopeActive && gitFiles.length === 0 && (
-        <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>
-          {t("i18n.noChanges")}
+        <div style={{ padding: "8px 12px", fontSize: 11, color: gitError ? "var(--error, #c44)" : "var(--text-dim)" }}>
+          {gitLoading
+            ? t("files.gitScanning", { path: getRelativeFilePath(gitScanPath, cwd) || gitScanPath })
+            : gitError
+              ? t("files.gitScanFailed", { error: gitError })
+              : gitNestedHint
+                ? t("files.gitOpenNestedRepo")
+                : t("i18n.noChanges")}
         </div>
       )}
 

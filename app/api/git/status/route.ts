@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolve } from "node:path";
 import { canMountVirtualCode, listVirtualCodeChildren, resolveDualRootPath, virtualCodeDisplayPath } from "@/lib/dual-roots";
 import { denyCrossAdminPath, getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed, isWindowsAbsolutePath } from "@/lib/file-access";
-import { getGitStatus, getGitStatusForest } from "@/lib/git-changes";
+import { getGitStatus } from "@/lib/git-changes";
 import type { GitStatusResponse } from "@/lib/git-types";
 import { isDatePoolRoot } from "@/lib/web-bash-guard";
 import { adminFromRequest, resolveCurrentAdminAsync, warehouseRoot, withWebAdmin } from "@/lib/web-admin-scope";
@@ -20,7 +20,7 @@ async function getGitStatusResponse(request: NextRequest) {
     }
 
     const admin = (await resolveCurrentAdminAsync()) || adminFromRequest(request);
-    const allowedRoots = await getAllowedFileRoots();
+    const allowedRoots = await getAllowedFileRoots(admin);
     if (denyCrossAdminPath(cwd, admin) || !isFilePathAllowed(cwd, allowedRoots)) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
@@ -74,7 +74,18 @@ async function getGitStatusResponse(request: NextRequest) {
     if (warehouse && canMountVirtualCode(warehouse, admin)) {
       const hit = listVirtualCodeChildren(admin).find((child) => sameRealPath(resolved, child.path));
       if (hit) {
-        return NextResponse.json(withDisplayPaths(await getGitStatusForest(hit.path)));
+        // Extra mounts like promptDet are folders of repos. Scan only if this
+        // folder itself is a git root — never union child statuses here.
+        const part = await getGitStatus(hit.path);
+        if (part.isGitRepository) return NextResponse.json(withDisplayPaths(part));
+        return NextResponse.json({
+          isGitRepository: false,
+          repositoryRoot: null,
+          files: [],
+          additions: 0,
+          deletions: 0,
+          scanReason: "nested_repos",
+        });
       }
     }
 

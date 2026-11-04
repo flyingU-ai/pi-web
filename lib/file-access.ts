@@ -1,13 +1,24 @@
+import { realpathSync } from "node:fs";
 import { getAdditionalAllowedRoots, getAllowedRootsCacheMap, allowedRootsCacheKey, normalizeSlashes } from "./allowed-roots";
 import { allAdminCodeRoots, isForeignAdminCodePath } from "./admin-workspaces";
 import { isForeignTermWorkspace, terminalWorkspaceRoot } from "./dual-roots";
 import { isExistingPathWithinRoots, isPathWithinRoots } from "./path-security";
 import { listAllSessions } from "./session-reader";
-import { resolveCurrentAdminAsync, warehouseRoot } from "./web-admin-scope";
+import { resolveCurrentAdminAsync, sanitizeWebAdmin, warehouseRoot } from "./web-admin-scope";
 export { allowFileRoot, normalizeSlashes } from "./allowed-roots";
 export { isWindowsAbsolutePath } from "./paths";
 
 const ALLOWED_ROOTS_TTL_MS = 5_000;
+
+function rememberRoot(roots: Set<string>, target: string): void {
+  if (!target) return;
+  roots.add(normalizeSlashes(target));
+  try {
+    roots.add(normalizeSlashes(realpathSync(target)));
+  } catch {
+    // Extra mounts and homes may be missing until the zone is created.
+  }
+}
 
 function isUsableRoot(target: string, admin: string): boolean {
   if (!target) return false;
@@ -21,9 +32,9 @@ export function denyCrossAdminPath(target: string, admin: string): boolean {
   return isForeignAdminCodePath(target, admin) || isForeignTermWorkspace(target, admin);
 }
 
-export async function getAllowedFileRoots(): Promise<Set<string>> {
+export async function getAllowedFileRoots(adminHint = ""): Promise<Set<string>> {
   const now = Date.now();
-  const admin = await resolveCurrentAdminAsync();
+  const admin = sanitizeWebAdmin(adminHint) || await resolveCurrentAdminAsync();
   const cacheKey = allowedRootsCacheKey(admin);
   const cacheMap = getAllowedRootsCacheMap();
   const cached = cacheMap.get(cacheKey);
@@ -37,17 +48,17 @@ export async function getAllowedFileRoots(): Promise<Set<string>> {
   }
 
   const warehouse = warehouseRoot();
-  if (warehouse) roots.add(normalizeSlashes(warehouse));
+  if (warehouse) rememberRoot(roots, warehouse);
 
   for (const codeRoot of allAdminCodeRoots(admin)) {
-    roots.add(normalizeSlashes(codeRoot));
+    rememberRoot(roots, codeRoot);
   }
 
   const termWs = terminalWorkspaceRoot(admin);
-  if (termWs) roots.add(normalizeSlashes(termWs));
+  if (termWs) rememberRoot(roots, termWs);
 
   for (const root of getAdditionalAllowedRoots(admin)) {
-    if (isUsableRoot(root, admin)) roots.add(root);
+    if (isUsableRoot(root, admin)) rememberRoot(roots, root);
   }
 
   cacheMap.set(cacheKey, { roots, expiresAt: now + ALLOWED_ROOTS_TTL_MS });

@@ -13,8 +13,9 @@ const filesSource = readFileSync(new URL("../../files/[...path]/route.ts", impor
 test("DatePool git status stays empty and does not forest extra mounts", () => {
   assert.match(source, /Opening Assistant on DatePool must stay O\(1\)/);
   assert.match(source, /isDatePoolRoot\(cwd\) \|\| isDatePoolRoot\(resolved\)/);
-  assert.doesNotMatch(source, /children\.map\(\(child\) => getGitStatusForest\(child\.path\)\)/);
-  assert.match(source, /getGitStatusForest\(hit\.path\)/);
+  assert.doesNotMatch(source, /getGitStatusForest/);
+  assert.match(source, /scanReason: "nested_repos"/);
+  assert.match(source, /getAllowedFileRoots\(admin\)/);
 });
 
 test("DatePool file-index only injects code\/ names", () => {
@@ -91,6 +92,88 @@ test("virtual code/promptDet status maps extra-mount diffs back to DatePool path
     assert.equal(body.files.length, 1);
     assert.equal(body.files[0].filePath, join(warehouse, "code", "promptDet", "tracked.py"));
     assert.equal(body.files[0].status, "modified");
+
+    const cookieOnly = await GET(new NextRequest(`http://localhost/api/git/status?cwd=${encodeURIComponent(virtual)}`, {
+      headers: { cookie: "aoi_admin=flyingu" },
+    }));
+    const cookieBody = await cookieOnly.json();
+    assert.equal(cookieOnly.status, 200, JSON.stringify(cookieBody));
+    assert.equal(cookieBody.files.length, 1);
+
+    const noAdmin = await GET(new NextRequest(`http://localhost/api/git/status?cwd=${encodeURIComponent(virtual)}`));
+    assert.equal(noAdmin.status, 404);
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    globalThis.__piAdditionalAllowedRootsByAdmin = previousRoots;
+    globalThis.__piAllowedRootsCacheByAdmin = previousCache;
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("folder-of-repos extra does not union child status; child repo is scanned alone", async () => {
+  const base = mkdtempSync(join(tmpdir(), "pi-web-git-status-nested-"));
+  const warehouse = join(base, "AgentSMarkDatePoolv2");
+  const extra = join(base, "promptDet");
+  const child = join(extra, "LitDeepFlow");
+  mkdirSync(join(warehouse, "smt_wh"), { recursive: true });
+  mkdirSync(child, { recursive: true });
+  execFileSync("git", ["-C", child, "init", "--quiet"]);
+  writeFileSync(join(child, "common_v1.py"), "original\n");
+  execFileSync("git", ["-C", child, "add", "."]);
+  execFileSync("git", ["-C", child, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "base"]);
+  writeFileSync(join(child, "common_v1.py"), "updated\n");
+  writeFileSync(join(child, "plan_smt_dip_v1.md"), "dirty\n");
+
+  const prev = {
+    ANNOTATION_WORKSPACE_ROOT: process.env.ANNOTATION_WORKSPACE_ROOT,
+    PI_WEB_ADMIN_WORKSPACES: process.env.PI_WEB_ADMIN_WORKSPACES,
+    PI_WEB_OPEN_FOLDER: process.env.PI_WEB_OPEN_FOLDER,
+  };
+  process.env.ANNOTATION_WORKSPACE_ROOT = warehouse;
+  process.env.PI_WEB_ADMIN_WORKSPACES = JSON.stringify({ flyingu: extra });
+  delete process.env.PI_WEB_OPEN_FOLDER;
+  const previousRoots = globalThis.__piAdditionalAllowedRootsByAdmin;
+  const previousCache = globalThis.__piAllowedRootsCacheByAdmin;
+  delete globalThis.__piAdditionalAllowedRootsByAdmin;
+  delete globalThis.__piAllowedRootsCacheByAdmin;
+
+  const jiti = createJiti(import.meta.url, {
+    alias: { "@": process.cwd() },
+    interopDefault: true,
+    moduleCache: false,
+  });
+  try {
+    const { GET } = await jiti.import("./route.ts");
+    const { allowFileRoot } = await jiti.import("../../../../lib/file-access.ts");
+    const { NextRequest } = await jiti.import("next/server");
+    allowFileRoot(warehouse, "flyingu");
+    allowFileRoot(extra, "flyingu");
+    allowFileRoot(warehouse);
+    allowFileRoot(extra);
+    delete globalThis.__piAllowedRootsCacheByAdmin;
+
+    const extraVirtual = join(warehouse, "code", "promptDet");
+    const extraRes = await GET(new NextRequest(`http://localhost/api/git/status?cwd=${encodeURIComponent(extraVirtual)}`, {
+      headers: { "x-aoi-admin": "flyingu" },
+    }));
+    const extraBody = await extraRes.json();
+    assert.equal(extraRes.status, 200, JSON.stringify(extraBody));
+    assert.equal(extraBody.isGitRepository, false);
+    assert.equal(extraBody.scanReason, "nested_repos");
+    assert.equal(extraBody.files.length, 0);
+
+    const childVirtual = join(warehouse, "code", "promptDet", "LitDeepFlow");
+    const childRes = await GET(new NextRequest(`http://localhost/api/git/status?cwd=${encodeURIComponent(childVirtual)}`, {
+      headers: { "x-aoi-admin": "flyingu" },
+    }));
+    const childBody = await childRes.json();
+    assert.equal(childRes.status, 200, JSON.stringify(childBody));
+    assert.equal(childBody.isGitRepository, true);
+    const names = childBody.files.map((file) => file.filePath.split("/").pop()).sort();
+    assert.deepEqual(names, ["common_v1.py", "plan_smt_dip_v1.md"]);
   } finally {
     for (const [key, value] of Object.entries(prev)) {
       if (value === undefined) delete process.env[key];
