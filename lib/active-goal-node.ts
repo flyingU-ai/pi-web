@@ -6,14 +6,11 @@ import { resolve as resolvePath } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import {
   ACTIVE_GOAL_EXTENSION_NAME,
-  countUserTurns,
   listDirectoryMentions,
-  pinActiveGoal,
 } from "./active-goal";
 
 export {
   ACTIVE_GOAL_EXTENSION_NAME,
-  ACTIVE_GOAL_NOTE,
   countUserTurns,
   listDirectoryMentions,
   pinActiveGoal,
@@ -54,7 +51,7 @@ export function composeActiveGoalSystem(options: {
   cwd?: string;
   priorUserTurns: number;
 }): string {
-  let next = pinActiveGoal(options.systemPrompt, options.priorUserTurns);
+  let next = String(options.systemPrompt || "");
   const cards = expandDirectoryMentions(options.prompt, options.cwd || "");
   if (cards && !next.includes("<dir_card ")) {
     next = next ? `${next}\n\n${cards}` : cards;

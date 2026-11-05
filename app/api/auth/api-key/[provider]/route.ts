@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { invalidateModelsCache } from "@/lib/models-cache";
 import { removeStoredCredentialIfType, storeProviderCredential } from "@/lib/provider-credential-store";
-import { createModelRuntimeWithExtensions } from "@/lib/model-runtime";
+import { createModelRuntimeWithExtensions, resolveAdminAuthPath } from "@/lib/model-runtime";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +40,7 @@ export async function POST(req: Request, { params }: Params) {
     // ModelRuntime.login() persists the credential and then performs an
     // unbounded network catalog refresh. Store the returned credential
     // directly so a slow catalog cannot leave the save request hanging.
-    await storeProviderCredential(provider, credential);
+    await storeProviderCredential(provider, credential, await resolveAdminAuthPath());
     invalidateModelsCache();
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -52,7 +52,7 @@ export async function POST(req: Request, { params }: Params) {
 export async function DELETE(_req: Request, { params }: Params) {
   const { provider } = await params;
   try {
-    const removal = await removeStoredCredentialIfType(provider, "api_key");
+    const removal = await removeStoredCredentialIfType(provider, "api_key", await resolveAdminAuthPath());
     if (removal.status === "type_mismatch") {
       return NextResponse.json(
         { error: `${provider} is authenticated with OAuth, not an API key` },

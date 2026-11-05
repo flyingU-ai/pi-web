@@ -73,6 +73,13 @@ export function scopedSessionsDir(admin: string, warehouse = warehouseRoot()): s
   return resolvePath(sessionsStoreRoot(warehouse), name, "pi");
 }
 
+/** Per-admin provider keys. Empty when there is no warehouse identity (tests / CLI-like). */
+export function scopedAuthPath(admin: string, warehouse = warehouseRoot()): string {
+  const name = sanitizeWebAdmin(admin);
+  if (!warehouse || !name) return "";
+  return resolvePath(sessionsStoreRoot(warehouse), name, "auth.json");
+}
+
 /** Sync: ALS admin, or `_no_admin` when the warehouse is set. Tests without a warehouse stay undefined. */
 export function resolveWebSessionDir(): string | undefined {
   const root = warehouseRoot();

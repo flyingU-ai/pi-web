@@ -1,18 +1,11 @@
 /**
- * Web-only host pin: sticky Chat must not close a new user turn with an
- * earlier git/commit topic. Local `pi-vllm -p --no-session` never has this
- * problem. Keep the added text short — this is not a second AGENTS.md.
+ * Directory mention cards for Web Chat. Do not pin extra system text here —
+ * local pi-vllm has no host-injected goal block.
  *
  * This file is imported by client hooks. Do not import node: builtins here.
  */
 
 export const ACTIVE_GOAL_EXTENSION_NAME = "agentsmark-active-goal";
-
-export const ACTIVE_GOAL_NOTE = [
-  "<active_goal>",
-  "本回合唯一交付目标是下面这条用户消息。更早的 git/commit/push 或其它已完成话题不得作为收口。未完成验收清单时不要提前结束。",
-  "</active_goal>",
-].join("\n");
 
 const GIT_TOPIC = /\b(git\s+status|commit|push|pull|rebase|stash)\b|提交|推送/i;
 const NEW_TASK_TOPIC =
@@ -23,11 +16,9 @@ export function countUserTurns(messages: Array<{ role?: string } | undefined> | 
   return messages.filter((m) => m && m.role === "user").length;
 }
 
-export function pinActiveGoal(systemPrompt: string, priorUserTurns: number): string {
-  const base = String(systemPrompt || "");
-  if (priorUserTurns < 1) return base;
-  if (base.includes("<active_goal>")) return base;
-  return base ? `${base}\n\n${ACTIVE_GOAL_NOTE}` : ACTIVE_GOAL_NOTE;
+/** Kept as a no-op so callers stay aligned with local pi-vllm (no system pin). */
+export function pinActiveGoal(systemPrompt: string, _priorUserTurns = 0): string {
+  return String(systemPrompt || "");
 }
 
 /** First-user git/commit vs a later analysis/build message → start a fresh session. */

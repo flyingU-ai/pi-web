@@ -381,6 +381,7 @@ test("delegates event stream readiness and hides an empty agent phase", () => {
   assert.match(chatWindowSource, /phaseLabel\(agentPhase, t, \{/);
   assert.match(chatWindowSource, /llamaDown: Boolean\(modelError\)/);
   assert.match(chatWindowSource, /chat\.stickyContextHint/);
+  assert.match(chatWindowSource, /chat\.openNewSession/);
   assert.match(phaseLabelSource, /return null;/);
 });
 

@@ -1,9 +1,23 @@
+import { join } from "node:path";
 import {
   createAgentSessionServices,
   getAgentDir,
-  type ModelRuntime,
+  ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { rememberProviderModels } from "./deferred-provider-models";
+import { resolveCurrentAdminAsync, scopedAuthPath } from "./web-admin-scope";
+
+export async function resolveAdminAuthPath(): Promise<string> {
+  const scoped = scopedAuthPath(await resolveCurrentAdminAsync());
+  return scoped || join(getAgentDir(), "auth.json");
+}
+
+export async function createAdminModelRuntime(): Promise<ModelRuntime> {
+  return ModelRuntime.create({
+    authPath: await resolveAdminAuthPath(),
+    refreshOnCreate: false,
+  });
+}
 
 /**
  * ModelRuntime that also includes providers registered by extensions (an
@@ -18,7 +32,8 @@ import { rememberProviderModels } from "./deferred-provider-models";
  */
 export async function createModelRuntimeWithExtensions(): Promise<ModelRuntime> {
   const agentDir = getAgentDir();
-  const services = await createAgentSessionServices({ cwd: agentDir, agentDir });
+  const modelRuntime = await createAdminModelRuntime();
+  const services = await createAgentSessionServices({ cwd: agentDir, agentDir, modelRuntime });
   await rememberProviderModels(services.modelRuntime);
   return services.modelRuntime;
 }

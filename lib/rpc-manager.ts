@@ -9,6 +9,7 @@ import { validateAgentImages } from "./image-attachments";
 import { invalidateModelsCache } from "./models-cache";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
 import { findDeferredModel, rememberProviderModels } from "./deferred-provider-models";
+import { createAdminModelRuntime } from "./model-runtime";
 import {
   createProjectCommandBashExtension,
   createProjectCommandBashOperations,
@@ -1092,22 +1093,6 @@ export class AgentSessionWrapper {
 
       case "follow_up": {
         const followImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
-        const pending = typeof this.inner.getFollowUpMessages === "function"
-          ? this.inner.getFollowUpMessages()
-          : [];
-        const steering = typeof this.inner.getSteeringMessages === "function"
-          ? this.inner.getSteeringMessages()
-          : [];
-        // Same-parent double follow-up (08:05 then 08:09) kept the stale short
-        // prompt. Keep only the latest follow-up; restore any steering.
-        if (Array.isArray(pending) && pending.length > 0 && typeof this.inner.clearQueue === "function") {
-          await this.inner.clearQueue();
-          if (Array.isArray(steering)) {
-            for (const text of steering) {
-              if (typeof text === "string" && text.trim()) await this.inner.steer(text);
-            }
-          }
-        }
         await this.inner.followUp(command.message as string, followImages?.length ? followImages : undefined);
         return null;
       }
@@ -2409,6 +2394,7 @@ export async function startRpcSession(
       cwd: sessionCwd,
       agentDir,
       settingsManager,
+      modelRuntime: await createAdminModelRuntime(),
       resourceLoaderOptions: subagentResources
         ? {
             ...subagentExtensionLoaderOptions(subagentResources),

@@ -1261,6 +1261,15 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
             {!agentRunning && contextPercent != null && contextPercent >= 25 && (
               <div className="break-words py-2 text-[13px] text-text-muted">
                 {t("chat.stickyContextHint", { percent: Math.round(contextPercent) })}
+                {messageCwd && onStartFreshSession ? (
+                  <button
+                    type="button"
+                    className="ml-2 underline"
+                    onClick={() => onStartFreshSession("", messageCwd)}
+                  >
+                    {t("chat.openNewSession")}
+                  </button>
+                ) : null}
               </div>
             )}
 
