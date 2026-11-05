@@ -6,7 +6,7 @@ import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecuti
 import { normalizeCustomPanelLines } from "@/lib/ansi";
 import { EXTENSION_DIALOG_BASE_WIDTH, fitExtensionDialogWidth } from "@/lib/extension-dialog-fit";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
-import { countToolCallBlocks, getAssistantErrorMessage, getDisplayableAssistantBlocks, hasAssistantAnswer, isAssistantTruncated, isMessageGroupAnchor, splitFinalAssistantBlocks } from "@/lib/message-display";
+import { countToolCallBlocks, endedAfterToolWithoutAnswer, getAssistantErrorMessage, getDisplayableAssistantBlocks, hasAssistantAnswer, isAssistantTruncated, isMessageGroupAnchor, splitFinalAssistantBlocks } from "@/lib/message-display";
 import { extractTurnWrittenFiles, type WrittenFile } from "@/lib/turn-written-files";
 import { buildQuotedSelection } from "@/lib/quoted-selection";
 import { dropMentionText, splitDroppedItems, uploadFiles, type DroppedItem } from "@/lib/file-upload-client";
@@ -18,7 +18,7 @@ import { ExtensionStatusBar } from "./ExtensionStatusBar";
 import { AnsiText } from "./AnsiText";
 import { useI18n } from "@/hooks/useI18n";
 import { PRODUCT_DISPLAY_NAME } from "@/lib/product";
-import { phaseLabel } from "@/lib/chat-phase-label";
+import { phaseLabel, STICKY_CONTEXT_HINT_PERCENT } from "@/lib/chat-phase-label";
 import { useAgentSession, type NoticeItem } from "@/hooks/useAgentSession";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -782,6 +782,16 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !sessionBusy;
   useScrollbarVisibility(scrollContainerRef, Boolean(session?.id) || !isEmptyNew);
   const hasStreamingContent = Boolean(streamState.streamingMessage?.content.length);
+  const lastAssistantMessage = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const row = messages[i];
+      if (row?.role === "assistant") return row as AssistantMessage;
+    }
+    return null;
+  }, [messages]);
+  const turnStoppedAfterTool = Boolean(
+    lastAssistantMessage && endedAfterToolWithoutAnswer(lastAssistantMessage),
+  );
   const messageCwd = session?.cwd ?? newSessionCwd ?? undefined;
   const promptAnchorSpacerRef = useRef<HTMLDivElement | null>(null);
   const promptAnchorSpacerHeightRef = useRef(0);
@@ -1258,7 +1268,13 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
               </div>
             )}
 
-            {!agentRunning && contextPercent != null && contextPercent >= 25 && (
+            {!agentRunning && turnStoppedAfterTool && (
+              <div className="break-words py-2 text-[13px] text-text-muted">
+                {t("chat.turnPausedContinue")}
+              </div>
+            )}
+
+            {!agentRunning && !turnStoppedAfterTool && contextPercent != null && contextPercent >= STICKY_CONTEXT_HINT_PERCENT && (
               <div className="break-words py-2 text-[13px] text-text-muted">
                 {t("chat.stickyContextHint", { percent: Math.round(contextPercent) })}
                 {messageCwd && onStartFreshSession ? (

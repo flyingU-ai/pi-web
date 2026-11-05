@@ -1,5 +1,8 @@
 import type { AgentPhase } from "@/hooks/useAgentSession";
 
+/** Occupancy hint while idle. Waiting-for-model still reports from 25%. */
+export const STICKY_CONTEXT_HINT_PERCENT = 70;
+
 /** The i18n translate function shape this module needs. */
 export type Translate = (key: string, params?: Record<string, string | number>) => string;
 

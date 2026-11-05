@@ -1,12 +1,11 @@
 /**
  * Server-only active-goal helpers. Imported by rpc-manager, never by client hooks.
+ * No system injection: local pi-vllm has neither a goal pin nor a directory card.
+ * `@path` stays in the user prompt; bash cwd is term-ws so relative `code/` resolves.
  */
-import { readdirSync, statSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import {
   ACTIVE_GOAL_EXTENSION_NAME,
-  listDirectoryMentions,
 } from "./active-goal";
 
 export {
@@ -17,32 +16,13 @@ export {
   shouldForkForNewTask,
 } from "./active-goal";
 
+/** Kept so callers compile; directory cards are not injected. */
 export function expandDirectoryMentions(
-  prompt: string,
-  cwd: string,
-  options: { maxEntries?: number } = {},
+  _prompt: string,
+  _cwd: string,
+  _options: { maxEntries?: number } = {},
 ): string {
-  const maxEntries = Math.max(1, options.maxEntries ?? 40);
-  const cards: string[] = [];
-  for (const rel of listDirectoryMentions(prompt)) {
-    const abs = resolvePath(String(cwd || "."), rel);
-    let st;
-    try {
-      st = statSync(abs);
-    } catch {
-      continue;
-    }
-    if (!st.isDirectory()) continue;
-    let names: string[] = [];
-    try {
-      names = readdirSync(abs).slice(0, maxEntries);
-    } catch {
-      continue;
-    }
-    const more = names.length >= maxEntries ? "\n…" : "";
-    cards.push(`<dir_card path="${rel}">\n${names.join("\n")}${more}\n</dir_card>`);
-  }
-  return cards.join("\n");
+  return "";
 }
 
 export function composeActiveGoalSystem(options: {
@@ -51,12 +31,7 @@ export function composeActiveGoalSystem(options: {
   cwd?: string;
   priorUserTurns: number;
 }): string {
-  let next = String(options.systemPrompt || "");
-  const cards = expandDirectoryMentions(options.prompt, options.cwd || "");
-  if (cards && !next.includes("<dir_card ")) {
-    next = next ? `${next}\n\n${cards}` : cards;
-  }
-  return next;
+  return String(options.systemPrompt || "");
 }
 
 function userTurnsFromSession(ctx: { sessionManager?: { getEntries?: () => unknown[] } } | undefined): number {

@@ -1,6 +1,7 @@
 /**
- * Directory mention cards for Web Chat. Do not pin extra system text here —
- * local pi-vllm has no host-injected goal block.
+ * Host helpers for Web Chat. Do not pin extra system text here —
+ * local pi-vllm has no host-injected goal or directory card.
+ * `@path` stays in the user message; the model lists it itself.
  *
  * This file is imported by client hooks. Do not import node: builtins here.
  */

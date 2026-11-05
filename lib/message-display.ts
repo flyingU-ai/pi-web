@@ -79,3 +79,14 @@ export function splitFinalAssistantBlocks(
 export function countToolCallBlocks(blocks: AssistantContentBlock[]): number {
   return blocks.filter((block): block is ToolCallContent => block.type === "toolCall").length;
 }
+
+/** Tool ran, then the turn ended with no text after it — ask the user to continue. */
+export function endedAfterToolWithoutAnswer(message: AssistantMessage): boolean {
+  const { answerBlocks, processBlocks } = splitFinalAssistantBlocks(message);
+  const hadTool = processBlocks.some((block) => block.type === "toolCall");
+  const hasFinal = answerBlocks.some((block) => {
+    if (block.type === "text") return block.text.trim().length > 0;
+    return block.type === "image";
+  });
+  return hadTool && !hasFinal;
+}
