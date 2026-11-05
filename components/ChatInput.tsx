@@ -584,8 +584,17 @@ export function ModelScopeWarningBanner({ warnings }: { warnings?: string[] }) {
   );
 }
 
+/** Composer only cares if THIS session's model is missing. Global unmatched patterns belong in Settings. */
+export function sessionModelUnavailable(
+  model: { provider: string; modelId: string } | null | undefined,
+  modelList: { id: string; provider: string }[] | undefined,
+): boolean {
+  if (!model || !Array.isArray(modelList) || modelList.length === 0) return false;
+  return !modelList.some((entry) => entry.provider === model.provider && entry.id === model.modelId);
+}
+
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
-  onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings, onModelChange, modelSwitching,
+  onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings: _modelScopeWarnings, onModelChange, modelSwitching,
   defaultModel, onSetDefaultModel,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange,
   thinkingLevel, isAutoThinkingSelection = false, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
@@ -1678,7 +1687,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       />}
       <div style={{ maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
         <ModelErrorBanner error={modelError} />
-        <ModelScopeWarningBanner warnings={modelScopeWarnings} />
+        <ModelScopeWarningBanner
+          warnings={
+            sessionModelUnavailable(model, modelList) && model
+              ? [t("chat.sessionModelUnavailable", { provider: model.provider, model: model.modelId })]
+              : undefined
+          }
+        />
         {showImageUnsupportedWarning && (() => {
           const entry = modelList?.find((m) => m.provider === model?.provider && m.id === model?.modelId);
           return (

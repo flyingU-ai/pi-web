@@ -11,7 +11,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, compressImageFile, cycleListIndex, filterModelOptions, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, modelSupportsImageInput, offersBuiltinSlashCommandWhileStreaming, replaceLinksWithMarkdown, shouldCompressImageFile, submitsSlashCommandOnEnter } = await jiti.import("./ChatInput.tsx");
+const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, sessionModelUnavailable, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, compressImageFile, cycleListIndex, filterModelOptions, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, modelSupportsImageInput, offersBuiltinSlashCommandWhileStreaming, replaceLinksWithMarkdown, shouldCompressImageFile, submitsSlashCommandOnEnter } = await jiti.import("./ChatInput.tsx");
 const { isBareMcpCommand } = await jiti.import("@/lib/mcp-command.ts");
 const { ModelSelector } = await jiti.import("./ModelSelector.tsx");
 const { clearDraft, getDraft, mergeRestoredSubmissionDraft, mergeRestoredSubmissionText, rekeyDraft, setDraft } = await jiti.import("@/lib/draft-store.ts");
@@ -207,7 +207,7 @@ test("does not render an empty model error", () => {
   );
 });
 
-test("renders enabledModels scope warnings", () => {
+test("renders enabledModels scope warnings in the banner component", () => {
   const html = renderToStaticMarkup(
     React.createElement(
       I18nProvider,
@@ -226,6 +226,47 @@ test("renders enabledModels scope warnings", () => {
     ),
     "",
   );
+});
+
+test("composer ignores global unmatched patterns and only warns when this session model is missing", () => {
+  const qwen = { provider: "llamacpp", modelId: "Qwen/Qwen3.8-27B-FP8" };
+  const list = [{ provider: "llamacpp", id: "Qwen/Qwen3.8-27B-FP8", name: "Qwen" }];
+  assert.equal(sessionModelUnavailable(qwen, list), false);
+  assert.equal(sessionModelUnavailable({ provider: "deepseek", modelId: "deepseek-flash" }, list), true);
+  assert.equal(sessionModelUnavailable(qwen, []), false);
+
+  const html = renderToStaticMarkup(
+    React.createElement(
+      I18nProvider,
+      null,
+      React.createElement(ChatInput, {
+        onSend() {},
+        onAbort() {},
+        isStreaming: false,
+        model: qwen,
+        modelList: list,
+        modelScopeWarnings: ['No models match pattern "qwen-token-plan/deepseek-v4-flash-0731"'],
+      }),
+    ),
+  );
+  assert.doesNotMatch(html, /qwen-token-plan/);
+  assert.doesNotMatch(html, /flash-0731/);
+
+  const missing = renderToStaticMarkup(
+    React.createElement(
+      I18nProvider,
+      null,
+      React.createElement(ChatInput, {
+        onSend() {},
+        onAbort() {},
+        isStreaming: false,
+        model: { provider: "deepseek", modelId: "deepseek-flash" },
+        modelList: list,
+      }),
+    ),
+  );
+  assert.match(missing, /not in the available list/);
+  assert.match(missing, /deepseek\/deepseek-flash/);
 });
 
 test("keeps the model selector visible when a model error leaves no options", () => {

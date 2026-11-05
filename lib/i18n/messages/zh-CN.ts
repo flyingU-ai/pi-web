@@ -453,6 +453,7 @@ export const zhCNLocale: LocalePlugin = {
     "chat.modelError": "模型错误",
     "chat.modelScopeWarning": "模型范围警告",
     "chat.modelScopeWarnings": "模型范围警告",
+    "chat.sessionModelUnavailable": "当前会话模型 {provider}/{model} 不在可用列表里",
     "chat.send": "发送",
     "chat.askSelection": "询问选中的文字",
     "chat.askInCurrent": "在当前对话询问",
