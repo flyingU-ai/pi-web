@@ -25,6 +25,7 @@ interface FileEntry {
   isDir: boolean;
   size: number;
   modified: string;
+  gitIgnored?: boolean;
   /** Where a directory link leads when that is outside the browsable roots. */
   outsideLinkTarget?: string;
   /** That target contains the project or the home folder. */
@@ -36,6 +37,7 @@ interface FileNode {
   fullPath: string;
   isDir: boolean;
   size: number;
+  gitIgnored?: boolean;
   children?: FileNode[];
   loaded?: boolean;
   outsideLinkTarget?: string;
@@ -99,6 +101,7 @@ async function fetchList(dirPath: string): Promise<{ nodes: FileNode[]; codeMoun
       fullPath: joinFilePath(dirPath, e.name),
       isDir: e.isDir,
       size: e.size,
+      gitIgnored: e.gitIgnored,
       children: e.isDir ? [] : undefined,
       loaded: !e.isDir,
       outsideLinkTarget: e.outsideLinkTarget,
@@ -297,6 +300,28 @@ export function TreeNode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken]);
 
+  // Watch an open folder so a terminal `rm` shows up without a manual refresh.
+  useEffect(() => {
+    if (!open || !loaded || pendingLinkTarget || !node.isDir) return;
+    const encoded = encodeFilePathForApi(node.fullPath);
+    const source = new EventSource(`/api/files/${encoded}?type=watch-dir`);
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    source.addEventListener("change", () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        debounce = null;
+        loadChildren(true);
+      }, 400);
+    });
+    source.onerror = () => {
+      // Heavy dirs and unsupported filesystems close the stream; listing still works.
+    };
+    return () => {
+      if (debounce) clearTimeout(debounce);
+      source.close();
+    };
+  }, [open, loaded, pendingLinkTarget, node.isDir, node.fullPath, loadChildren]);
+
   const selected = selectedDir === node.fullPath;
 
   const handleClick = useCallback(() => {
@@ -376,12 +401,13 @@ export function TreeNode({
           style={{
             fontSize: 12,
             color: "var(--text)",
+            opacity: node.gitIgnored ? 0.55 : 1,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
             flex: 1,
           }}
-          title={node.fullPath}
+          title={node.gitIgnored ? t("files.gitIgnored", { path: node.fullPath }) : node.fullPath}
         >
           {node.name}
         </span>
@@ -897,6 +923,25 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 
   const refreshCodeTree = useCallback(() => {
     setTreeRefreshKey((key) => key + 1);
+  }, []);
+
+  useEffect(() => {
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const bump = () => {
+      if (document.visibilityState !== "visible") return;
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        debounce = null;
+        setTreeRefreshKey((key) => key + 1);
+      }, 800);
+    };
+    window.addEventListener("focus", bump);
+    document.addEventListener("visibilitychange", bump);
+    return () => {
+      if (debounce) clearTimeout(debounce);
+      window.removeEventListener("focus", bump);
+      document.removeEventListener("visibilitychange", bump);
+    };
   }, []);
 
   const runCodeMutate = useCallback(async (target: string, body: Record<string, string>) => {

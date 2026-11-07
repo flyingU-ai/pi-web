@@ -523,6 +523,8 @@ test("reconnects active shell output to its streaming tool call", () => {
   assert.match(updateSource, /content,/);
   assert.match(endSource, /setActiveToolResults[\s\S]*next\.delete\(id\)/);
   assert.match(endSource, /setToolStartedAt[\s\S]*next\.delete\(id\)/);
+  assert.match(endSource, /forgetToolStartedAt/);
+  assert.match(endSource, /onFilesystemMaybeChanged/);
   assert.match(chatWindowSource, /const map = new Map\(activeToolResults\)/);
   assert.match(chatWindowSource, /<MessageView message=\{streamState\.streamingMessage as AgentMessage\} toolResults=\{toolResultsMap\} toolStartedAt=\{toolStartedAt\}/);
 });
@@ -541,18 +543,24 @@ test("refresh paints persisted history before includeState and RPC bind", () => 
   assert.match(source, /if \(!messagesLoaded\) setLoading\(false\)/);
 });
 
-test("starts the tool-row clock on execution start and clears it when the session settles", () => {
+test("starts the tool-row clock on execution start and keeps inflight stamps across settle", () => {
   const startSource = source.slice(
     source.indexOf('case "tool_execution_start"'),
     source.indexOf('case "tool_execution_update"'),
+  );
+  const updateSource = source.slice(
+    source.indexOf('case "tool_execution_update"'),
+    source.indexOf('case "tool_execution_end"'),
   );
   const settleSource = source.slice(
     source.indexOf("const settleUiStage = useCallback"),
     source.indexOf("const notifyPromptStage"),
   );
-  assert.match(startSource, /setToolStartedAt/);
-  assert.match(startSource, /next\.set\(id, Date\.now\(\)\)/);
+  assert.match(startSource, /rememberToolStartedAt/);
+  assert.match(updateSource, /rememberToolStartedAt/);
   assert.match(settleSource, /setToolStartedAt\(new Map\(\)\)/);
+  assert.match(settleSource, /forgetSessionToolStartedAt/);
+  assert.match(settleSource, /if \(!wasRunning\)/);
   assert.doesNotMatch(source, /setWorkingMessage: \(/);
 });
 

@@ -988,7 +988,7 @@ function BlockView({ block, searchTarget, toolResults, toolStartedAt, assistantT
     const tc = block as ToolCallContent;
     const result = toolResults?.get(tc.toolCallId);
     const duration = toolCallDurations?.get(tc.toolCallId);
-    return <ToolCallBlock block={tc} result={result} duration={duration} startedAt={toolStartedAt?.get(tc.toolCallId)} assistantTimestamp={assistantTimestamp} isStreaming={isStreaming} onOpenSession={onOpenSession} />;
+    return <ToolCallBlock block={tc} result={result} duration={duration} startedAt={toolStartedAt?.get(tc.toolCallId) ?? (isStreaming ? assistantTimestamp : undefined)} assistantTimestamp={assistantTimestamp} isStreaming={isStreaming} onOpenSession={onOpenSession} />;
   }
   return null;
 }

@@ -734,14 +734,25 @@ export class AgentSessionWrapper {
         // this submission starts a run or joins its streaming queue.
         const releaseAdmission = await this.acquirePromptAdmission();
         try {
-          if (this.inner.isBashRunning) {
+          const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+          const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
+          // A normal prompt cannot start while bash is running. Steer/follow-up
+          // must still queue: during a tool call isStreaming may be false, so
+          // prompt() would start a second run. Queue the same way the TUI does.
+          if (this.inner.isBashRunning && !streamingBehavior) {
             throw new Error("Cannot send a prompt while a shell command is running");
+          }
+          if (this.inner.isBashRunning && streamingBehavior && !this.inner.isStreaming) {
+            if (streamingBehavior === "followUp") {
+              await this.inner.followUp(command.message as string, promptImages?.length ? promptImages : undefined);
+            } else {
+              await this.inner.steer(command.message as string, promptImages?.length ? promptImages : undefined);
+            }
+            return null;
           }
           if (this.extensionUiAbortController.signal.aborted) {
             this.extensionUiAbortController = new AbortController();
           }
-          const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
-          const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
           let preflightAccepted = false;
           let preflightSettled = false;
           let promptSettled = false;

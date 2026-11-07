@@ -52,6 +52,11 @@ import {
   streamReducer,
   type ClientAssistantMessageEvent,
 } from "@/lib/streaming-message";
+import {
+  forgetSessionToolStartedAt,
+  forgetToolStartedAt,
+  rememberToolStartedAt,
+} from "@/lib/tool-started-at";
 
 export interface SessionData {
   sessionId: string;
@@ -172,6 +177,8 @@ export interface UseAgentSessionOptions {
   newSessionCwd: string | null;
   newSessionDraftKey: string | null;
   onAgentEnd?: () => void;
+  /** Bash/write/edit finished; the file tree may have changed. */
+  onFilesystemMaybeChanged?: () => void;
   onAttentionNeeded?: (request: BlockingExtensionUiRequest) => void;
   onSessionCreated?: (session: SessionInfo, sourceDraftKey: string) => void;
   onSessionForked?: (newSessionId: string) => void;
@@ -329,7 +336,7 @@ type SlashCommandsResponse = {
 
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
-    session, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked,
+    session, newSessionCwd, newSessionDraftKey, onAgentEnd, onFilesystemMaybeChanged, onAttentionNeeded, onSessionCreated, onSessionForked,
     onStartFreshSession,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
     onOpenSettings,
@@ -1172,6 +1179,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setActiveToolResults(new Map());
     setToolStartedAt(new Map());
     dispatch({ type: "end" });
+    // Keep inflight clocks if the run is still going in another session tab.
+    if (!wasRunning) {
+      const sid = sessionIdRef.current;
+      if (sid) forgetSessionToolStartedAt(sid);
+    }
     return wasRunning;
   }, []);
 
@@ -1576,10 +1588,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (isNestedToolExecutionEvent(event)) break;
         const id = event.toolCallId as string;
         const name = event.toolName as string;
+        const sid = sessionIdRef.current;
+        const startedAt = sid ? rememberToolStartedAt(sid, id) : Date.now();
         setToolStartedAt((prev) => {
-          if (prev.has(id)) return prev;
+          if (prev.get(id) === startedAt) return prev;
           const next = new Map(prev);
-          next.set(id, Date.now());
+          next.set(id, startedAt);
           return next;
         });
         setAgentPhase((prev) => {
@@ -1593,10 +1607,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (isNestedToolExecutionEvent(event)) break;
         const id = event.toolCallId as string;
         const name = event.toolName as string;
+        const sid = sessionIdRef.current;
+        const startedAt = sid ? rememberToolStartedAt(sid, id) : Date.now();
         setToolStartedAt((prev) => {
-          if (prev.has(id)) return prev;
+          if (prev.get(id) === startedAt) return prev;
           const next = new Map(prev);
-          next.set(id, Date.now());
+          next.set(id, startedAt);
           return next;
         });
         const partialResult = event.partialResult as Partial<ToolResultMessage> | undefined;
@@ -1637,6 +1653,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "tool_execution_end": {
         if (isNestedToolExecutionEvent(event)) break;
         const id = event.toolCallId as string;
+        const name = event.toolName as string;
+        const sid = sessionIdRef.current;
+        if (sid) forgetToolStartedAt(sid, id);
         setActiveToolResults((prev) => {
           if (!prev.has(id)) return prev;
           const next = new Map(prev);
@@ -1655,6 +1674,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (tools.length === 0) return { kind: "waiting_model" };
           return { kind: "running_tools", tools };
         });
+        if (name === "bash" || name === "powershell" || name === "write" || name === "edit") {
+          onFilesystemMaybeChanged?.();
+        }
         break;
       }
       case "queue_update":
@@ -1693,7 +1715,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setExtensionDialogs((queue) => removeExtensionUiRequest(queue, event.id as string));
         break;
     }
-  }, [addNotice, applyContextUsage, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, refreshContextUsage, scheduleEventStreamClose, scrollToBottom, settleUiStage, syncLiveModel]);
+  }, [addNotice, applyContextUsage, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, onFilesystemMaybeChanged, refreshContextUsage, scheduleEventStreamClose, scrollToBottom, settleUiStage, syncLiveModel]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -1863,8 +1885,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       bashRunningRef.current = false;
       setPendingBash(null);
       setBashRunning(false);
+      onFilesystemMaybeChanged?.();
     }
-  }, [addNotice, composerDraftKey, ensureNewSession, loadSession, promoteNewSession, restoreSubmission, session]);
+  }, [addNotice, composerDraftKey, ensureNewSession, loadSession, onFilesystemMaybeChanged, promoteNewSession, restoreSubmission, session]);
   executeBashRef.current = executeBash;
 
   const handleAbort = useCallback(async () => {

@@ -20,7 +20,7 @@ import {
   getVideoMime,
 } from "@/lib/file-types";
 import { resolveDirentIsDirectory } from "@/lib/file-dirent";
-import { getFileTreeVisibility, isHiddenOutsideGit } from "@/lib/file-tree-visibility";
+import { getFileTreeVisibility, getGitIgnoredListedNames, isHiddenOutsideGit } from "@/lib/file-tree-visibility";
 import { isPoolHeavyDir } from "@/lib/web-bash-guard";
 import { isFilePathReferencedBySession } from "@/lib/session-file-references";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
@@ -46,7 +46,7 @@ import { filePathFromApiSegments, samePath } from "@/lib/paths";
 import { hasParentDirectorySegment } from "@/lib/path-security";
 import { readTextPreviewChunk } from "@/lib/text-preview";
 
-const FILE_REQUEST_TYPES = ["list", "read", "download", "meta", "preview", "watch"] as const;
+const FILE_REQUEST_TYPES = ["list", "read", "download", "meta", "preview", "watch", "watch-dir"] as const;
 type FileRequestType = typeof FILE_REQUEST_TYPES[number];
 const FILE_REQUEST_TYPE_SET = new Set<string>(FILE_REQUEST_TYPES);
 const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
@@ -708,6 +708,53 @@ export async function GET(
       });
     }
 
+    if (type === "watch-dir") {
+      if (!stat?.isDirectory()) {
+        return NextResponse.json({ error: "Not a directory" }, { status: 400 });
+      }
+      if (isPoolHeavyDir(filePath)) {
+        return NextResponse.json({ error: "Directory is too large to watch" }, { status: 400 });
+      }
+      let watcher: fs.FSWatcher | null = null;
+      const stream = new ReadableStream({
+        start(controller) {
+          const send = (eventName: string, data: Record<string, unknown> = {}) => {
+            const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
+            try {
+              controller.enqueue(new TextEncoder().encode(payload));
+            } catch {
+              // client disconnected
+            }
+          };
+          try {
+            watcher = fs.watch(filePath, () => {
+              send("change", { path: filePath });
+            });
+            watcher.on("error", () => {
+              try { watcher?.close(); } catch { /* ignore */ }
+              watcher = null;
+              try { controller.close(); } catch { /* ignore */ }
+            });
+            send("connected", { path: filePath });
+          } catch {
+            send("error", { message: "Failed to watch directory" });
+            controller.close();
+          }
+        },
+        cancel() {
+          try { watcher?.close(); } catch { /* ignore */ }
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+        },
+      });
+    }
+
     // type === "list"
     if (!stat?.isDirectory()) {
       return NextResponse.json({ error: "Not a directory" }, { status: 400 });
@@ -721,16 +768,26 @@ export async function GET(
       const rest = dirents.filter((d) => !d.name.startsWith("pool_distribution")).slice(0, 80);
       dirents = [...keep, ...rest];
     }
+    const names = dirents.map((d) => d.name);
     const isVisible = isPoolHeavyDir(filePath)
       ? (name: string) => !isHiddenOutsideGit(name)
-      : await getFileTreeVisibility(filePath, dirents.map((d) => d.name));
+      : await getFileTreeVisibility(filePath, names);
+    const ignoredListed = isPoolHeavyDir(filePath)
+      ? new Set<string>()
+      : await getGitIgnoredListedNames(filePath, names);
     const entries = dirents
       .filter((d) => isVisible(d.name))
       .flatMap((d) => {
         const isDir = resolveDirentIsDirectory(d, path.join(filePath, d.name));
         return isDir === null
           ? []
-          : [{ name: d.name, isDir, size: 0, modified: "" }];
+          : [{
+            name: d.name,
+            isDir,
+            size: 0,
+            modified: "",
+            ...(ignoredListed.has(d.name) ? { gitIgnored: true as const } : {}),
+          }];
       })
       .sort((a, b) => {
         // Dirs first, then files, both alphabetically

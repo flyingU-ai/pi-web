@@ -23,6 +23,13 @@ const OAUTH_DISPLAY_NAMES: Record<string, string> = {
   "github-copilot": "GitHub Copilot",
 };
 
+/** Monthly Qwen Token Plan variants — pick the one that matches the QwenCloud site. */
+const API_KEY_DISPLAY_NAMES: Record<string, string> = {
+  "qwen-token-plan": "Qwen Token Plan (International)",
+  "qwen-token-plan-cn": "Qwen Token Plan (China)",
+  "qwen-token-plan-individual": "Qwen Token Plan (Individual)",
+};
+
 export interface ProviderListingInput {
   id: string;
   /** Provider display name (`provider.name`). */
@@ -89,7 +96,7 @@ export function buildApiKeyProviderList(
     const configured = provider.status.configured && provider.credentialType !== "oauth";
     result.push({
       id: provider.id,
-      displayName: provider.name,
+      displayName: API_KEY_DISPLAY_NAMES[provider.id] ?? provider.name,
       configured,
       ...(configured && provider.status.source ? { source: provider.status.source } : {}),
       modelCount: provider.modelCount,

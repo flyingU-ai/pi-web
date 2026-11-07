@@ -1725,10 +1725,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 fontSize: 10,
                 fontFamily: "var(--font-mono)",
                 color: "var(--text-dim)",
-                textTransform: "uppercase",
                 letterSpacing: 0.4,
+                minWidth: 0,
               }}>
-                {t("chat.queued", { count: (queuedMessages?.steering.length ?? 0) + (queuedMessages?.followUp.length ?? 0) })}
+                <span style={{ textTransform: "uppercase" }}>
+                  {t("chat.queued", { count: (queuedMessages?.steering.length ?? 0) + (queuedMessages?.followUp.length ?? 0) })}
+                </span>
+                <span style={{ marginLeft: 8, fontWeight: 400, textTransform: "none" }}>{t("chat.queuedHint")}</span>
               </span>
               {onRecallQueue && (
                 <button
