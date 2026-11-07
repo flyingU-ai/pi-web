@@ -59,8 +59,46 @@ export function formatRelativeTime(date: Date | string, locale: Locale, now = ne
   return new Intl.RelativeTimeFormat(locale, { numeric: "always" }).format(value, unit as Intl.RelativeTimeFormatUnit);
 }
 
+/** 作业台时钟。机器和浏览器常是 UTC，界面仍显示北京时间。 */
+export const DISPLAY_TIME_ZONE = "Asia/Shanghai";
+
+function zonedDay(date: Date, timeZone = DISPLAY_TIME_ZONE): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
 /**
- * 今天只显示时刻；更早的时间和会话列表一样用相对时间。
+ * 绝对时间：今天只显示时刻，更早的带上日期。时区固定为北京时间，语言跟界面。
+ * @param input 毫秒时间戳、Date 或 ISO 字符串
+ * @param locale 当前语言
+ * @param now 用于测试或特殊场景的当前时间
+ * @returns 北京时间文本；无法解析时返回空字符串
+ */
+export function formatAbsoluteTime(input: Date | string | number, locale: Locale | string, now = new Date()): string {
+  const target = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(target.getTime())) return "";
+  const time = target.toLocaleTimeString(locale, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: DISPLAY_TIME_ZONE,
+  });
+  if (zonedDay(target) === zonedDay(now)) return time;
+  const date = target.toLocaleDateString(locale, {
+    month: "short",
+    day: "numeric",
+    year: zonedDay(target).slice(0, 4) === zonedDay(now).slice(0, 4) ? undefined : "numeric",
+    timeZone: DISPLAY_TIME_ZONE,
+  });
+  return `${date} ${time}`;
+}
+
+/**
+ * 今天只显示北京时间的时刻；更早的时间和会话列表一样用相对时间。
  * @param timestamp 毫秒时间戳
  * @param locale 当前语言
  * @param now 用于测试或特殊场景的当前时间
@@ -69,9 +107,6 @@ export function formatRelativeTime(date: Date | string, locale: Locale, now = ne
 export function formatUpdatedTime(timestamp: number, locale: Locale, now = new Date()): string {
   const target = new Date(timestamp);
   if (Number.isNaN(target.getTime())) return "";
-  const isToday = target.getFullYear() === now.getFullYear()
-    && target.getMonth() === now.getMonth()
-    && target.getDate() === now.getDate();
-  if (isToday) return target.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+  if (zonedDay(target) === zonedDay(now)) return formatAbsoluteTime(target, locale, now);
   return formatRelativeTime(target, locale, now);
 }

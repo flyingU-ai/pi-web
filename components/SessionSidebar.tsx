@@ -8,7 +8,7 @@ import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib/project-groups";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
-import { formatRelativeTime } from "@/lib/i18n/format";
+import { formatAbsoluteTime, formatRelativeTime } from "@/lib/i18n/format";
 import { useI18n } from "@/hooks/useI18n";
 import { PRODUCT_DISPLAY_NAME } from "@/lib/product";
 import { useResizablePanel } from "@/hooks/useResizablePanel";
@@ -2471,7 +2471,7 @@ function SessionItem({
               ) : isUnread ? (
                 <UnreadSessionIndicator />
               ) : (
-                <span title={session.modified}>{formatRelativeTime(session.modified, locale)}</span>
+                <span title={formatAbsoluteTime(session.modified, locale)}>{formatRelativeTime(session.modified, locale)}</span>
               )}
               <span>
                 {session.detailsPending ? "…" : t("sidebar.messagesCount", { count: session.messageCount })}

@@ -76,6 +76,8 @@ function shellEnvironment(): Record<string, string> {
   }
   env.TERM = "xterm-256color";
   env.COLORTERM = "truecolor";
+  // The lab host clock is UTC. Shells print Beijing time unless the operator set TZ.
+  if (!env.TZ) env.TZ = "Asia/Shanghai";
   env.PS1 = env.PS1 ?? "\\u@\\h:\\w\\$ ";
   env.PATH = labPath(process.env.PATH);
   env.CONDA_NO_PLUGINS = "true";
