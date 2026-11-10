@@ -5,7 +5,7 @@
  * falling back to `$池/.agent/sessions/<admin>/pi`.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { resolve as resolvePath, sep } from "node:path";
+import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 
 export const WEB_ADMIN_COOKIE = "aoi_admin";
 export const WEB_ADMIN_HEADER = "x-aoi-admin";
@@ -71,6 +71,27 @@ export function sessionsStoreRoot(warehouse = warehouseRoot()): string {
 export function scopedSessionsDir(admin: string, warehouse = warehouseRoot()): string {
   const name = sanitizeWebAdmin(admin) || NO_ADMIN_LEAF;
   return resolvePath(sessionsStoreRoot(warehouse), name, "pi");
+}
+
+/** Admin leaf of `PI_WEB_SESSIONS_ROOT/<admin>/pi/<file>`. Empty when the file is elsewhere. */
+export function adminFromSessionFile(sessionFile: string, warehouse = warehouseRoot()): string {
+  const file = String(sessionFile || "").trim();
+  if (!file) return "";
+  const rel = relative(resolvePath(sessionsStoreRoot(warehouse)), resolvePath(file));
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return "";
+  const [admin, leaf] = rel.split(sep);
+  if (leaf !== "pi") return "";
+  return sanitizeWebAdmin(admin);
+}
+
+/** SSH keys and plan alarms. Not a file-tree root. */
+export function isHostPrivateAdminPath(target: string, warehouse = warehouseRoot()): boolean {
+  const file = String(target || "").trim();
+  if (!file) return false;
+  const rel = relative(resolvePath(sessionsStoreRoot(warehouse)), resolvePath(file));
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return false;
+  const parts = rel.split(sep);
+  return parts[1] === "ssh" || parts[1] === "alarms";
 }
 
 /** Per-admin provider keys. Empty when there is no warehouse identity (tests / CLI-like). */

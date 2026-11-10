@@ -4,7 +4,8 @@ import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@e
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "fs";
 import { resolve } from "path";
-import { fileIsUnder, resolveWebSessionDir, resolveWebSessionDirAsync } from "./web-admin-scope";
+import { adminFromSessionFile, currentWebAdmin, fileIsUnder, resolveWebSessionDir, resolveWebSessionDirAsync } from "./web-admin-scope";
+import { capturePlanAlarm } from "./plan-alarms";
 import { validateAgentImages } from "./image-attachments";
 import { invalidateModelsCache } from "./models-cache";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
@@ -2431,6 +2432,7 @@ export async function startRpcSession(
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
                 settings: settingsManager,
+                admin: adminFromSessionFile(sessionFile) || currentWebAdmin(),
               }),
               createSubagentExtension(
                 SUBAGENT_CONTROLLER.extensionRuntime,
@@ -2515,6 +2517,15 @@ export async function startRpcSession(
       exactSystemPrompt,
       chatOnly,
       onAgentRunComplete: (completedSessionId) => {
+        try {
+          capturePlanAlarm({
+            sessionId: completedSessionId,
+            sessionFile: inner.sessionFile ?? "",
+            text: (inner as { getLastAssistantText?: () => string | null }).getLastAssistantText?.() ?? "",
+          });
+        } catch (error) {
+          console.error("[pi-web] plan alarm capture failed:", error instanceof Error ? error.message : error);
+        }
         void notifySessionComplete(completedSessionId).catch((error) => {
           console.error("[pi-web] failed to send completion push:", error instanceof Error ? error.message : error);
         });

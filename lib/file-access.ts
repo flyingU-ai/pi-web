@@ -4,7 +4,7 @@ import { allAdminCodeRoots, isForeignAdminCodePath } from "./admin-workspaces";
 import { isForeignTermWorkspace, terminalWorkspaceRoot } from "./dual-roots";
 import { isExistingPathWithinRoots, isPathWithinRoots } from "./path-security";
 import { listAllSessions } from "./session-reader";
-import { resolveCurrentAdminAsync, sanitizeWebAdmin, warehouseRoot } from "./web-admin-scope";
+import { isHostPrivateAdminPath, resolveCurrentAdminAsync, sanitizeWebAdmin, warehouseRoot } from "./web-admin-scope";
 export { allowFileRoot, normalizeSlashes } from "./allowed-roots";
 export { isWindowsAbsolutePath } from "./paths";
 
@@ -67,10 +67,18 @@ export async function getAllowedFileRoots(adminHint = ""): Promise<Set<string>> 
 
 /** Authorize a path lexically, without touching the filesystem. */
 export function isFilePathAllowed(target: string, allowedRoots: Set<string>): boolean {
+  if (isHostPrivateAdminPath(target)) return false;
   return isPathWithinRoots(target, allowedRoots);
 }
 
 /** Authorize an existing path after resolving symbolic links. */
 export function isExistingFilePathAllowed(target: string, allowedRoots: Set<string>): boolean {
-  return isExistingPathWithinRoots(target, allowedRoots);
+  if (isHostPrivateAdminPath(target)) return false;
+  if (!isExistingPathWithinRoots(target, allowedRoots)) return false;
+  try {
+    if (isHostPrivateAdminPath(realpathSync(target))) return false;
+  } catch {
+    // The lexical check already ran. A missing path is not a secret file.
+  }
+  return true;
 }

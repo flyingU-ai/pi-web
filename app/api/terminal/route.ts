@@ -3,6 +3,7 @@ import { resolve } from "path";
 import { NextResponse } from "next/server";
 import { isForeignTermWorkspace, resolveTerminalCwd } from "@/lib/dual-roots";
 import { denyCrossAdminPath, getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { adminShellEnv } from "@/lib/admin-ssh";
 import { createTerminal } from "@/lib/terminal-manager";
 import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 
@@ -39,6 +40,7 @@ export async function POST(req: Request) {
       typeof body.cols === "number" ? body.cols : 80,
       typeof body.rows === "number" ? body.rows : 24,
       body.id as string | undefined,
+      admin ? adminShellEnv(admin) : undefined,
     );
     return NextResponse.json({ id });
   } catch (error) {

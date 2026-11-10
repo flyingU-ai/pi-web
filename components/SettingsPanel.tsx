@@ -33,6 +33,7 @@ import { SkillsConfig } from "./SkillsConfig";
 import { AgentsConfig } from "./AgentsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { McpConfig } from "./McpConfig";
+import { GitSshSettings } from "./GitSshSettings";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 
 interface Props {
@@ -348,6 +349,8 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
           </p>
         )}
       </section>
+
+      <GitSshSettings />
 
       <section className="settings-general-section">
         <h3 className="settings-general-heading">{t("common.language")}</h3>

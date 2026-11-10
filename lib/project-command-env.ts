@@ -12,6 +12,7 @@ import {
   isWalkLikeCommand,
   resolveBashTimeout,
 } from "./web-bash-guard";
+import { applyAdminSshEnvironment } from "./admin-ssh";
 import { resolveAgentBashCwd, rewriteVirtualCodeText } from "./dual-roots";
 
 const HOST_EXTENSION_NAME = "pi-web-project-command-environment";
@@ -34,6 +35,7 @@ type ProjectCommandBashOperationsOptions = {
   localOperations?: BashOperations;
   platform?: NodeJS.Platform;
   shellPath?: string;
+  admin?: string;
 };
 
 type BashExecResult = Awaited<ReturnType<BashOperations["exec"]>>;
@@ -87,15 +89,20 @@ export function createProjectCommandBashOperations(
     startGraceSeconds = 0,
     localOperations = createLocalBashOperations({ shellPath: options.shellPath }),
     platform = process.platform,
+    admin = "",
   } = options;
 
   return {
     exec(command, cwd, executionOptions) {
       const resolvedCommand = rewriteVirtualCodeText(command);
       const resolvedCwd = resolveAgentBashCwd(cwd);
-      const environment = withAgentBinDirectory(
-        sanitizeProjectCommandEnvironment(executionOptions.env ?? baseEnvironment, platform),
-        agentBinDir,
+      const environment = applyAdminSshEnvironment(
+        withAgentBinDirectory(
+          sanitizeProjectCommandEnvironment(executionOptions.env ?? baseEnvironment, platform),
+          agentBinDir,
+          platform,
+        ),
+        admin,
         platform,
       );
       const { onData, signal, timeout } = executionOptions;
@@ -186,6 +193,7 @@ export function createProjectCommandBashOperations(
 export function createProjectCommandBashExtension(options: {
   cwd: string;
   settings: ProjectShellSettings;
+  admin?: string;
 }): InlineExtension {
   return {
     name: HOST_EXTENSION_NAME,
@@ -200,6 +208,7 @@ export function createProjectCommandBashExtension(options: {
             commandPrefix: options.settings.getShellCommandPrefix(),
             operations: createProjectCommandBashOperations({
               shellPath: options.settings.getShellPath(),
+              admin: options.admin,
             }),
           });
           const asked = resolveBashTimeout((params as { timeout?: unknown })?.timeout);

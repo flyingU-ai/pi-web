@@ -63,7 +63,7 @@ function registry(): Map<string, TerminalRecord> {
   return globalThis.__piWebTerminals;
 }
 
-function shellEnvironment(): Record<string, string> {
+function shellEnvironment(extra?: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
@@ -84,6 +84,11 @@ function shellEnvironment(): Record<string, string> {
   // Windows shells (Git Bash / MSYS2, cmd, PowerShell) otherwise inherit the
   // system ANSI codepage (e.g. GBK on zh-CN) and mangle non-ASCII filenames.
   if (!process.env.LANG && !process.env.LC_ALL && !process.env.LC_CTYPE) env.LANG = "C.UTF-8";
+  if (!extra) return env;
+  if (extra.PATH_PREFIX) env.PATH = `${extra.PATH_PREFIX}:${env.PATH}`;
+  if (extra.SSH_AUTH_SOCK === "") delete env.SSH_AUTH_SOCK;
+  if (extra.GIT_SSH_COMMAND) env.GIT_SSH_COMMAND = extra.GIT_SSH_COMMAND;
+  else if (extra.GIT_SSH_COMMAND === "") delete env.GIT_SSH_COMMAND;
   return env;
 }
 
@@ -102,7 +107,13 @@ function dimension(value: number, fallback: number): number {
   return Math.min(1000, Math.max(2, Number.isFinite(value) ? Math.floor(value) : fallback));
 }
 
-export function createTerminal(cwd: string, cols: number, rows: number, id: string = randomUUID()): string {
+export function createTerminal(
+  cwd: string,
+  cols: number,
+  rows: number,
+  id: string = randomUUID(),
+  extraEnv?: Record<string, string>,
+): string {
   const existing = registry().get(id);
   if (existing) {
     if (!samePath(existing.cwd, cwd)) throw new Error("Terminal belongs to a different workspace");
@@ -132,7 +143,7 @@ export function createTerminal(cwd: string, cols: number, rows: number, id: stri
     cols: dimension(cols, 80),
     rows: dimension(rows, 24),
     cwd: cwd || homedir(),
-    env: shellEnvironment(),
+    env: shellEnvironment(extraEnv),
   });
   const record: TerminalRecord = {
     pty,
