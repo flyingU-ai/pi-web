@@ -57,6 +57,8 @@ interface Props {
   fileSearchOpen?: boolean;
   onFileSearchOpenChange?: (open: boolean) => void;
   onUploadDirChange?: (dir: string) => void;
+  /** Tool-end hint. Debounced, then only the selected directory reloads. */
+  selectedTouchKey?: number;
 }
 
 export interface FileExplorerHandle {
@@ -223,6 +225,7 @@ export function TreeNode({
   expandedPaths,
   onToggleExpanded,
   refreshToken,
+  directoryTouchToken,
   highlightedPaths,
   gitStatusByPath,
   changedDirectoryPaths,
@@ -240,6 +243,8 @@ export function TreeNode({
   expandedPaths: Set<string>;
   onToggleExpanded: (fullPath: string, open: boolean) => void;
   refreshToken?: string;
+  /** Bumped after a debounced tool-end touch. Reloads only this selected directory. */
+  directoryTouchToken?: number;
   highlightedPaths: Set<string>;
   gitStatusByPath: Map<string, GitFileStatus>;
   changedDirectoryPaths: Set<string>;
@@ -292,7 +297,7 @@ export function TreeNode({
     }
   }, [loaded, node.fullPath]);
 
-  // Re-fetch children when the tree refreshes and the directory is open.
+  // Manual refresh (the toolbar button, upload, rename). Not tool-end.
   useEffect(() => {
     if (refreshToken !== undefined && open && loaded && !pendingLinkTarget) {
       loadChildren(true);
@@ -300,27 +305,15 @@ export function TreeNode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken]);
 
-  // Watch an open folder so a terminal `rm` shows up without a manual refresh.
+  // A bash/write/edit only reloads the directory the operator has selected.
   useEffect(() => {
-    if (!open || !loaded || pendingLinkTarget || !node.isDir) return;
-    const encoded = encodeFilePathForApi(node.fullPath);
-    const source = new EventSource(`/api/files/${encoded}?type=watch-dir`);
-    let debounce: ReturnType<typeof setTimeout> | null = null;
-    source.addEventListener("change", () => {
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => {
-        debounce = null;
-        loadChildren(true);
-      }, 400);
-    });
-    source.onerror = () => {
-      // Heavy dirs and unsupported filesystems close the stream; listing still works.
-    };
-    return () => {
-      if (debounce) clearTimeout(debounce);
-      source.close();
-    };
-  }, [open, loaded, pendingLinkTarget, node.isDir, node.fullPath, loadChildren]);
+    if (!directoryTouchToken || !open || !loaded || pendingLinkTarget) return;
+    const here = normalizeFilePathSlashes(node.fullPath).replace(/\/+$/, "");
+    const selected = normalizeFilePathSlashes(selectedDir).replace(/\/+$/, "");
+    if (here !== selected) return;
+    loadChildren(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directoryTouchToken]);
 
   const selected = selectedDir === node.fullPath;
 
@@ -378,7 +371,9 @@ export function TreeNode({
           height: 24,
           cursor: "pointer",
           background: selected
-            ? (inCodeZone ? "color-mix(in srgb, #3b82f6 18%, transparent)" : "var(--bg-selected)")
+            ? (inCodeZone
+              ? "color-mix(in srgb, #3b82f6 18%, transparent)"
+              : "color-mix(in srgb, #d97706 16%, transparent)")
             : hovered ? "var(--bg-hover)" : "transparent",
           borderRadius: 4,
           userSelect: "none",
@@ -607,6 +602,7 @@ export function TreeNode({
               expandedPaths={expandedPaths}
               onToggleExpanded={onToggleExpanded}
               refreshToken={refreshToken}
+              directoryTouchToken={directoryTouchToken}
               highlightedPaths={highlightedPaths}
               gitStatusByPath={gitStatusByPath}
               changedDirectoryPaths={changedDirectoryPaths}
@@ -767,6 +763,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   fileSearchOpen = false,
   onFileSearchOpenChange,
   onUploadDirChange,
+  selectedTouchKey = 0,
 }, ref) {
   const { t } = useI18n();
   const [roots, setRoots] = useState<FileNode[]>([]);
@@ -801,6 +798,12 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const prevCwdRef = useRef<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const refreshToken = `${refreshKey ?? 0}:${treeRefreshKey}`;
+  const [directoryTouchToken, setDirectoryTouchToken] = useState(0);
+  useEffect(() => {
+    if (!selectedTouchKey) return;
+    const timer = setTimeout(() => setDirectoryTouchToken(selectedTouchKey), 800);
+    return () => clearTimeout(timer);
+  }, [selectedTouchKey]);
   const uploadBusy = uploadPhase !== "idle";
   const hasSearchQuery = searchQuery.trim().length > 0;
 
@@ -908,12 +911,18 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     () => (codeNode ? roots.filter((node) => node !== codeNode) : roots),
     [roots, codeNode],
   );
-  const uploadDir = useMemo(
-    () => uploadDirFromSelection(cwd, selectedDir),
-    [cwd, selectedDir],
-  );
   const codeRootPath = codeNode?.fullPath ?? "";
   const codeHomePath = codeRootPath ? joinFilePath(codeRootPath, "home") : "";
+  useEffect(() => {
+    if (!codeHomePath) return;
+    const selected = normalizeFilePathSlashes(selectedDir).replace(/\/+$/, "");
+    const root = normalizeFilePathSlashes(cwd).replace(/\/+$/, "");
+    if (selected === root || selected === codeRootPath) setSelectedDir(codeHomePath);
+  }, [codeHomePath, codeRootPath, cwd, selectedDir]);
+  const uploadDir = useMemo(
+    () => uploadDirFromSelection(cwd, selectedDir, codeHomePath, codeRootPath),
+    [cwd, selectedDir, codeHomePath, codeRootPath],
+  );
   const codeParent = useMemo(() => {
     if (!codeRootPath) return "";
     if (selectedDir === codeRootPath) return codeHomePath;
@@ -923,25 +932,6 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 
   const refreshCodeTree = useCallback(() => {
     setTreeRefreshKey((key) => key + 1);
-  }, []);
-
-  useEffect(() => {
-    let debounce: ReturnType<typeof setTimeout> | null = null;
-    const bump = () => {
-      if (document.visibilityState !== "visible") return;
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => {
-        debounce = null;
-        setTreeRefreshKey((key) => key + 1);
-      }, 800);
-    };
-    window.addEventListener("focus", bump);
-    document.addEventListener("visibilitychange", bump);
-    return () => {
-      if (debounce) clearTimeout(debounce);
-      window.removeEventListener("focus", bump);
-      document.removeEventListener("visibilitychange", bump);
-    };
   }, []);
 
   const runCodeMutate = useCallback(async (target: string, body: Record<string, string>) => {
@@ -1153,6 +1143,23 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [cwd, refreshKey, treeRefreshKey]);
+
+  // Tool-end while the warehouse root itself is selected: one list, not the open tree.
+  useEffect(() => {
+    if (!directoryTouchToken) return;
+    const root = normalizeFilePathSlashes(cwd).replace(/\/+$/, "");
+    const selected = normalizeFilePathSlashes(selectedDir).replace(/\/+$/, "");
+    if (selected !== root) return;
+    let cancelled = false;
+    fetchList(cwd)
+      .then((listed) => {
+        if (cancelled) return;
+        setRoots(listed.nodes);
+        setCodeMountHint(listed.codeMount ?? null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [directoryTouchToken, cwd, selectedDir]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1546,6 +1553,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
                       expandedPaths={expandedPaths}
                       onToggleExpanded={handleToggleExpanded}
                       refreshToken={refreshToken}
+                      directoryTouchToken={directoryTouchToken}
                       highlightedPaths={highlightedPaths}
                       gitStatusByPath={gitStatusByPath}
                       changedDirectoryPaths={changedDirectoryPaths}
@@ -1558,25 +1566,56 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
                   ))}
                 </div>
               ) : null}
-              {dataRoots.map((node) => (
-                <TreeNode
-                  key={node.fullPath}
-                  node={node}
-                  depth={0}
-                  cwd={cwd}
-                  onOpenFile={onOpenFile}
-                  onAtMention={onAtMention}
-                  expandedPaths={expandedPaths}
-                  onToggleExpanded={handleToggleExpanded}
-                  refreshToken={refreshToken}
-                  highlightedPaths={highlightedPaths}
-                  gitStatusByPath={gitStatusByPath}
-                  changedDirectoryPaths={changedDirectoryPaths}
-                  selectedDir={selectedDir}
-                  onSelectDir={setSelectedDir}
-                  t={t}
-                />
-              ))}
+              {dataRoots.length > 0 ? (
+                <div
+                  style={{
+                    marginBottom: 6,
+                    padding: "2px 0 4px",
+                    borderRadius: 6,
+                    background: "color-mix(in srgb, #d97706 8%, transparent)",
+                    border: "1px solid color-mix(in srgb, #d97706 28%, var(--border))",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "0 10px",
+                      height: 22,
+                      display: "flex",
+                      alignItems: "center",
+                      color: "#b45309",
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: 0.4,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {t("files.dataZone")}
+                  </div>
+                  <div style={{ padding: "2px 10px 4px", fontSize: 10, color: "#b45309" }}>
+                    {t("files.dataZoneHint")}
+                  </div>
+                  {dataRoots.map((node) => (
+                    <TreeNode
+                      key={node.fullPath}
+                      node={node}
+                      depth={0}
+                      cwd={cwd}
+                      onOpenFile={onOpenFile}
+                      onAtMention={onAtMention}
+                      expandedPaths={expandedPaths}
+                      onToggleExpanded={handleToggleExpanded}
+                      refreshToken={refreshToken}
+                      directoryTouchToken={directoryTouchToken}
+                      highlightedPaths={highlightedPaths}
+                      gitStatusByPath={gitStatusByPath}
+                      changedDirectoryPaths={changedDirectoryPaths}
+                      selectedDir={selectedDir}
+                      onSelectDir={setSelectedDir}
+                      t={t}
+                    />
+                  ))}
+                </div>
+              ) : null}
             </>
           )}
           {!loading && !error && (

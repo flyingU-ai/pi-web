@@ -190,6 +190,7 @@ export function AppShell() {
     setSearchTarget((current) => current === target ? null : current);
   }, []);
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
+  const [explorerTouchKey, setExplorerTouchKey] = useState(0);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [projectTrust, setProjectTrust] = useState<ProjectTrustStatus | null>(null);
@@ -1024,6 +1025,9 @@ export function AppShell() {
   const handleExplorerRefresh = useCallback(() => {
     setExplorerRefreshKey((k) => k + 1);
   }, []);
+  const handleExplorerTouchSelected = useCallback(() => {
+    setExplorerTouchKey((k) => k + 1);
+  }, []);
 
   const handleSessionForked = useCallback((newSessionId: string) => {
     invalidateWorkspaceRestore();
@@ -1279,6 +1283,7 @@ export function AppShell() {
         onOpenFile={handleOpenFile}
         onOpenTerminal={handleOpenTerminal}
         explorerRefreshKey={explorerRefreshKey}
+        explorerTouchKey={explorerTouchKey}
         onExplorerRefresh={handleExplorerRefresh}
         onAtMention={handleAtMention}
         onAtMentions={handleAtMentions}
@@ -1969,8 +1974,6 @@ export function AppShell() {
       }
     `}</style>
     <div
-      ref={rightPanelResizer.panelRef}
-      className={rightPanelOpen && !rightPanelFullWidth ? "layout-editor-center" : undefined}
       style={{
       display: "flex",
       width: "100%",
@@ -2027,15 +2030,13 @@ export function AppShell() {
         />
       )}
 
-      {/* Chat: center when idle, right when a file or terminal is open. */}
+      {/* Chat stays in the middle. Files/terminal stay on the far right. */}
       <div
         className="chat-column"
         inert={rightPanelFullWidth}
         style={{
-          flex: rightPanelOpen && !rightPanelFullWidth ? "0 0 var(--right-panel-width, 420px)" : 1,
-          width: rightPanelOpen && !rightPanelFullWidth ? "var(--right-panel-width, 420px)" : undefined,
-          minWidth: rightPanelOpen && !rightPanelFullWidth ? 280 : 0,
-          maxWidth: rightPanelOpen && !rightPanelFullWidth ? "min(520px, 42vw)" : undefined,
+          flex: 1,
+          minWidth: 0,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -2423,7 +2424,7 @@ export function AppShell() {
               newSessionCwd={effectiveNewSessionCwd}
               newSessionDraftKey={newSessionDraftKey}
               onAgentEnd={handleAgentEnd}
-              onFilesystemMaybeChanged={handleExplorerRefresh}
+              onFilesystemMaybeChanged={handleExplorerTouchSelected}
               onAttentionNeeded={handleAttentionNeeded}
               onSessionCreated={handleSessionCreated}
               onSessionForked={handleSessionForked}

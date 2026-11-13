@@ -19,6 +19,7 @@ import { AnsiText } from "./AnsiText";
 import { useI18n } from "@/hooks/useI18n";
 import { PRODUCT_DISPLAY_NAME } from "@/lib/product";
 import { phaseLabel, STICKY_CONTEXT_HINT_PERCENT } from "@/lib/chat-phase-label";
+import { adminFetchInit } from "@/lib/web-admin-client";
 import { useAgentSession, type NoticeItem } from "@/hooks/useAgentSession";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -439,8 +440,13 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   useEffect(() => {
     if (loading || error || !initialPrompt || initialPromptSentRef.current) return;
     initialPromptSentRef.current = true;
-    onInitialPromptConsumed?.();
-    void handleSend(initialPrompt);
+    void Promise.resolve(handleSend(initialPrompt)).then((ok) => {
+      if (ok === false) {
+        initialPromptSentRef.current = false;
+        return;
+      }
+      onInitialPromptConsumed?.();
+    });
   }, [initialPrompt, loading, error, handleSend, onInitialPromptConsumed]);
 
   // One sound when a dialog appears with none on screen. A dialog queued behind

@@ -8,7 +8,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import {
-  BASH_WALL_FALLBACK_SECONDS,
   isWalkLikeCommand,
   resolveBashTimeout,
 } from "./web-bash-guard";
@@ -212,10 +211,12 @@ export function createProjectCommandBashExtension(options: {
             }),
           });
           const asked = resolveBashTimeout((params as { timeout?: unknown })?.timeout);
-          const timeout = asked ?? BASH_WALL_FALLBACK_SECONDS;
+          const next = { ...(params as object), command } as { command: string; timeout?: number };
+          if (asked === undefined) delete next.timeout;
+          else next.timeout = asked;
           return executionDefinition.execute(
             toolCallId,
-            { ...(params as object), command, timeout } as { command: string; timeout?: number },
+            next,
             signal,
             onUpdate,
             context,

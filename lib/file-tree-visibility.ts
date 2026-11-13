@@ -149,15 +149,50 @@ function isAlwaysHidden(name: string): boolean {
   return ALWAYS_HIDDEN_NAMES.has(name) || isHiddenOutsideGit(name);
 }
 
+export interface FileTreeListing {
+  isVisible: (name: string) => boolean;
+  /** Ignored names the tree still shows, dimmed. Junk folders are absent. */
+  ignoredListed: ReadonlySet<string>;
+}
+
+/**
+ * One listing of `directory`: visibility and the dimmed-ignored set.
+ *
+ * Call this once per `type=list`. `getFileTreeVisibility` and
+ * `getGitIgnoredListedNames` each run git again; the file route must not
+ * call both.
+ */
+export async function readFileTreeListing(
+  directory: string,
+  names: readonly string[],
+): Promise<FileTreeListing> {
+  const candidates = names.filter((name) => !ALWAYS_HIDDEN_NAMES.has(name));
+  const ignored = candidates.length > 0 ? await readGitIgnoredNames(directory, candidates) : null;
+  if (!ignored) {
+    return {
+      isVisible: (name) => !isHiddenOutsideGit(name),
+      ignoredListed: new Set(),
+    };
+  }
+  // Tracked `build/` stays visible (#677). Untracked ignored junk
+  // (node_modules, dist) stays hidden. Other ignored names (.manifest.json)
+  // list so the tree matches `ls`; the UI dims them.
+  return {
+    isVisible: (name) => {
+      if (ALWAYS_HIDDEN_NAMES.has(name)) return false;
+      if (ignored.has(name) && isHiddenOutsideGit(name)) return false;
+      return true;
+    },
+    ignoredListed: new Set([...ignored].filter((name) => !isAlwaysHidden(name))),
+  };
+}
+
 /** Git-ignored names that are still worth listing (dimmed), not junk folders. */
 export async function getGitIgnoredListedNames(
   directory: string,
   names: readonly string[],
 ): Promise<Set<string>> {
-  const candidates = names.filter((name) => !isAlwaysHidden(name));
-  const ignored = candidates.length > 0 ? await readGitIgnoredNames(directory, candidates) : null;
-  if (!ignored) return new Set();
-  return new Set([...ignored].filter((name) => !isAlwaysHidden(name)));
+  return new Set((await readFileTreeListing(directory, names)).ignoredListed);
 }
 
 /** Build the visibility test for one listing of `directory`. */
@@ -165,15 +200,5 @@ export async function getFileTreeVisibility(
   directory: string,
   names: readonly string[],
 ): Promise<(name: string) => boolean> {
-  const candidates = names.filter((name) => !ALWAYS_HIDDEN_NAMES.has(name));
-  const ignored = candidates.length > 0 ? await readGitIgnoredNames(directory, candidates) : null;
-  if (!ignored) return (name) => !isHiddenOutsideGit(name);
-  // Tracked `build/` stays visible (#677). Untracked ignored junk
-  // (node_modules, dist) stays hidden. Other ignored names (.manifest.json)
-  // list so the tree matches `ls`; the UI dims them.
-  return (name) => {
-    if (ALWAYS_HIDDEN_NAMES.has(name)) return false;
-    if (ignored.has(name) && isHiddenOutsideGit(name)) return false;
-    return true;
-  };
+  return (await readFileTreeListing(directory, names)).isVisible;
 }

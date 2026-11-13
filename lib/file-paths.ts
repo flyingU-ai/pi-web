@@ -46,10 +46,34 @@ export function joinFilePath(parent: string, child: string): string {
   return `${normalizeFilePathSlashes(parent).replace(/\/+$/, "")}/${child}`;
 }
 
-/** Upload into the selected folder when it sits under cwd; otherwise cwd. */
-export function uploadDirFromSelection(cwd: string, selectedDir?: string | null): string {
-  const root = normalizeFilePathSlashes(cwd).replace(/\/+$/, "");
+export function isUnderCodeZone(target: string, codeRoot?: string | null): boolean {
+  const t = normalizeFilePathSlashes(target).replace(/\/+$/, "");
+  const root = codeRoot ? normalizeFilePathSlashes(codeRoot).replace(/\/+$/, "") : "";
+  if (root) return t === root || t.startsWith(`${root}/`);
+  return /(^|\/)code(\/|$)/.test(t);
+}
+
+/**
+ * Uploads only land in the code zone. Selected data/_incoming folders do not
+ * become the drop target — default is code/home, never the DatePool root.
+ */
+export function uploadDirFromSelection(
+  cwd: string,
+  selectedDir?: string | null,
+  codeHome?: string | null,
+  codeRoot?: string | null,
+): string {
+  const home = codeHome ? normalizeFilePathSlashes(codeHome).replace(/\/+$/, "") : "";
+  const zone = codeRoot ? normalizeFilePathSlashes(codeRoot).replace(/\/+$/, "") : "";
   const selected = selectedDir ? normalizeFilePathSlashes(selectedDir).replace(/\/+$/, "") : "";
-  if (selected && (selected === root || selected.startsWith(`${root}/`))) return selected;
-  return root;
+  if (zone && selected && (selected === zone || selected.startsWith(`${zone}/`))) {
+    if (selected === zone && home) return home;
+    return selected;
+  }
+  if (home) return home;
+  const root = normalizeFilePathSlashes(cwd).replace(/\/+$/, "");
+  if (selected && (selected === root || selected.startsWith(`${root}/`)) && isUnderCodeZone(selected, zone)) {
+    return selected;
+  }
+  return home || root;
 }

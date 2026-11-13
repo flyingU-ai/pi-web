@@ -1863,30 +1863,6 @@ span.token.table {
   .right-panel-container.right-panel-resizing > * {
     transition: none !important;
   }
-
-  /* File/terminal in the middle, agent on the right — like Cursor, still light. */
-  .layout-editor-center .sidebar-container { order: 1; }
-  .layout-editor-center .sidebar-resize-handle { order: 2; }
-  .layout-editor-center .right-panel-container.right-panel-open {
-    order: 3;
-    flex: 1 1 auto;
-    width: auto;
-    min-width: 280px;
-    border-left: none !important;
-    border-right: 1px solid var(--border);
-  }
-  .layout-editor-center .right-panel-container.right-panel-open > * {
-    width: 100%;
-    min-width: 0;
-  }
-  .layout-editor-center .right-panel-resize-handle { order: 4; }
-  .layout-editor-center .chat-column {
-    order: 5;
-    flex: 0 0 var(--right-panel-width, 420px) !important;
-    width: var(--right-panel-width, 420px) !important;
-    min-width: 280px !important;
-    max-width: min(520px, 42vw);
-  }
 }
 
 /* Compact desktop file panel: overlay the chat instead of collapsing it. */

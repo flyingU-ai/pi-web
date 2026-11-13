@@ -2,10 +2,8 @@
 
 export const FLEET_SLOT_CTX = 131072;
 export const FLEET_MAX_TOKENS = 16384;
-/** Process-safety ceiling only. Idle fuse defaults to off (0). */
-export const BASH_WALL_FALLBACK_SECONDS = 86400;
 
-/** Model-asked wall timeout. Missing/invalid → no requested wall. */
+/** Model-asked wall timeout. Missing/invalid → no wall, same as local pi-vllm. */
 export function resolveBashTimeout(timeout: unknown): number | undefined {
   const n = Number(timeout);
   if (!Number.isFinite(n) || n <= 0) return undefined;
