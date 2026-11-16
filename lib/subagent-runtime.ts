@@ -8,7 +8,10 @@ import {
   SettingsManager,
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
+import { createAdminPathGateExtension } from "./admin-path-gate";
 import type { AgentSessionLike } from "./pi-types";
+import { createProjectCommandBashExtension } from "./project-command-env";
+import { adminFromSessionFile, currentWebAdmin } from "./web-admin-scope";
 import {
   subagentNotificationText,
   subagentToolDetails,
@@ -259,6 +262,7 @@ export function createSubagentController(
         exactSystemPrompt: promptPlan.exactSystemPrompt,
       });
       if (!chatOnly) initTheme();
+      const childAdmin = adminFromSessionFile(parent.sessionFile) || currentWebAdmin();
       const services = await createAgentSessionServices({
         cwd: childCwd,
         agentDir,
@@ -277,6 +281,14 @@ export function createSubagentController(
               }
             : {}),
           appendSystemPrompt,
+          extensionFactories: [
+            createAdminPathGateExtension({ admin: childAdmin }),
+            createProjectCommandBashExtension({
+              cwd: childCwd,
+              settings: settingsManager,
+              admin: childAdmin,
+            }),
+          ],
         },
         ...((profile.loadExtensions || profile.loadSkills)
           ? { resourceLoaderReloadOptions: projectTrustReloadOptions(childCwd, agentDir) }

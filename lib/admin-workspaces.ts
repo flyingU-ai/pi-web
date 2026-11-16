@@ -42,6 +42,18 @@ export function legacyCodeHomesRoot(env: NodeJS.ProcessEnv = process.env): strin
   return warehouse ? join(warehouse, ".agent", "code-homes") : "";
 }
 
+/** Data tree lists `$池/.agent` but not the per-admin code parent. */
+export function isDataTreeCodeZoneName(
+  directory: string,
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (name !== "code" && name !== "code-homes") return false;
+  const warehouse = warehouseFromEnv(env);
+  if (!warehouse) return false;
+  return resolve(directory) === resolve(warehouse, ".agent");
+}
+
 /** Kept so lab checks still see the old leaf name while we migrate. */
 export function codeHomesRoot(env: NodeJS.ProcessEnv = process.env): string {
   return legacyCodeHomesRoot(env);

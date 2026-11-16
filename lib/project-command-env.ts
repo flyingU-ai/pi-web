@@ -12,7 +12,9 @@ import {
   resolveBashTimeout,
 } from "./web-bash-guard";
 import { applyAdminSshEnvironment } from "./admin-ssh";
+import { bashCommandBlockReason } from "./admin-path-gate";
 import { resolveAgentBashCwd, rewriteVirtualCodeText } from "./dual-roots";
+import { sanitizeWebAdmin, currentWebAdmin } from "./web-admin-scope";
 
 const HOST_EXTENSION_NAME = "pi-web-project-command-environment";
 const HOST_EXTENSION_PATH = `<inline:${HOST_EXTENSION_NAME}>`;
@@ -93,8 +95,14 @@ export function createProjectCommandBashOperations(
 
   return {
     exec(command, cwd, executionOptions) {
-      const resolvedCommand = rewriteVirtualCodeText(command);
-      const resolvedCwd = resolveAgentBashCwd(cwd);
+      const sessionAdmin = sanitizeWebAdmin(admin) || currentWebAdmin();
+      const resolvedCommand = rewriteVirtualCodeText(command, sessionAdmin);
+      const resolvedCwd = resolveAgentBashCwd(cwd, sessionAdmin);
+      const blocked = bashCommandBlockReason(resolvedCommand, sessionAdmin);
+      if (blocked) {
+        executionOptions.onData(Buffer.from(`${blocked}\n`));
+        return Promise.resolve({ exitCode: 1 });
+      }
       const environment = applyAdminSshEnvironment(
         withAgentBinDirectory(
           sanitizeProjectCommandEnvironment(executionOptions.env ?? baseEnvironment, platform),

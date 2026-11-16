@@ -41,6 +41,7 @@ import {
   VIRTUAL_CODE_HOME,
 } from "@/lib/dual-roots";
 import { isDatePoolRoot } from "@/lib/web-bash-guard";
+import { isDataTreeCodeZoneName } from "@/lib/admin-workspaces";
 import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 import { filePathFromApiSegments, samePath } from "@/lib/paths";
 import { hasParentDirectorySegment } from "@/lib/path-security";
@@ -49,7 +50,7 @@ import { readTextPreviewChunk } from "@/lib/text-preview";
 const FILE_REQUEST_TYPES = ["list", "read", "download", "meta", "preview", "watch"] as const;
 type FileRequestType = typeof FILE_REQUEST_TYPES[number];
 const FILE_REQUEST_TYPE_SET = new Set<string>(FILE_REQUEST_TYPES);
-const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_UPLOAD_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024;
 // Multipart boundaries and headers are not file bytes, but must be bounded too.
 const MAX_UPLOAD_REQUEST_BYTES = MAX_UPLOAD_TOTAL_BYTES + 1024 * 1024;
@@ -231,7 +232,7 @@ export async function POST(
     }
     const files = formData.getAll("files").filter((entry): entry is File => typeof entry !== "string");
     if (files.some((file) => file.size > MAX_UPLOAD_FILE_BYTES)) {
-      return NextResponse.json({ error: "Each upload must be 25MB or smaller" }, { status: 413 });
+      return NextResponse.json({ error: "Each upload must be 100MB or smaller" }, { status: 413 });
     }
     if (files.reduce((total, file) => total + file.size, 0) > MAX_UPLOAD_TOTAL_BYTES) {
       return NextResponse.json({ error: "Uploads must total 100MB or less" }, { status: 413 });
@@ -736,7 +737,7 @@ export async function GET(
       ? { isVisible: (name: string) => !isHiddenOutsideGit(name), ignoredListed: new Set<string>() }
       : await readFileTreeListing(filePath, names);
     const entries = dirents
-      .filter((d) => listing.isVisible(d.name))
+      .filter((d) => listing.isVisible(d.name) && !isDataTreeCodeZoneName(filePath, d.name))
       .flatMap((d) => {
         const isDir = resolveDirentIsDirectory(d, path.join(filePath, d.name));
         return isDir === null

@@ -13,6 +13,7 @@ import {
 import { buildEntriesFromFiles, filterFileEntries, type FileIndexEntry } from "@/lib/file-fuzzy";
 import { isHiddenOutsideGit } from "@/lib/file-tree-visibility";
 import { canMountVirtualCode, listVirtualCodeChildren, VIRTUAL_CODE_DIR } from "@/lib/dual-roots";
+import { isDataTreeCodeZoneName } from "@/lib/admin-workspaces";
 import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 import { isDatePoolRoot, isPoolHeavyDir } from "@/lib/web-bash-guard";
 
@@ -165,6 +166,13 @@ export async function GET(req: NextRequest) {
       let listing = isDatePoolRoot(cwd) || isPoolHeavyDir(cwd)
         ? listDatePoolTop(cwd)
         : (await listWithGit(cwd)) ?? listWithWalk(cwd);
+      if (isDataTreeCodeZoneName(cwd, "code")) {
+        listing = {
+          files: listing.files.filter((name) => name !== "code/" && name !== "code-homes/"
+            && !name.startsWith("code/") && !name.startsWith("code-homes/")),
+          hardTruncated: listing.hardTruncated,
+        };
+      }
       if (codeChildren.length && (isDatePoolRoot(cwd) || isPoolHeavyDir(cwd))) {
         listing = {
           files: [

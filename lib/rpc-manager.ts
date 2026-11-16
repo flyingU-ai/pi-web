@@ -10,6 +10,7 @@ import { invalidateModelsCache } from "./models-cache";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
 import { findDeferredModel, rememberProviderModels } from "./deferred-provider-models";
 import { createAdminModelRuntime } from "./model-runtime";
+import { createAdminPathGateExtension } from "./admin-path-gate";
 import {
   createProjectCommandBashExtension,
   createProjectCommandBashOperations,
@@ -2426,6 +2427,9 @@ export async function startRpcSession(
             extensionFactories: [
               ...(builtins?.extensions ?? []),
               createReadOnlyMcpPolicyExtension(),
+              createAdminPathGateExtension({
+                admin: adminFromSessionFile(sessionFile) || currentWebAdmin(),
+              }),
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
                 settings: settingsManager,
