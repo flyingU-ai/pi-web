@@ -29,6 +29,7 @@ import type { AppUpdateResponse } from "@/lib/api-types";
 import type { ToolEntry } from "@/lib/tool-presets";
 import type { SettingsSection } from "@/lib/settings-navigation";
 import { findChatScrollAnchor, type ChatScrollPosition } from "@/lib/chat-scroll-position";
+import { commitPairDelivery, notifyPairChange } from "@/lib/session-pair";
 import {
   captureScrollDistance,
   getPromptAnchorSpacerHeight,
@@ -70,6 +71,7 @@ interface Props {
   onOpenSession?: (sessionId: string) => void;
   onAskInNewChat?: (prompt: string, sourceSessionId: string, sourceEntryId: string) => Promise<void>;
   quoteSelectionEnabled?: boolean;
+  storageScope?: string;
   initialPrompt?: string;
   onInitialPromptConsumed?: () => void;
   /** Completion sound state + controls, owned by AppShell so tasks finishing in
@@ -234,7 +236,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
   );
 }
 
-export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initialScrollPosition, onScrollPositionChange, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onFilesystemMaybeChanged, onAttentionNeeded, onSessionCreated, onSessionForked, onStartFreshSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onOpenSettings, onContextUsageChange, onOpenFile, onFilesUploaded, onOpenSession, onAskInNewChat, quoteSelectionEnabled = false, initialPrompt, onInitialPromptConsumed, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio }: Props) {
+export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initialScrollPosition, onScrollPositionChange, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onFilesystemMaybeChanged, onAttentionNeeded, onSessionCreated, onSessionForked, onStartFreshSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onOpenSettings, onContextUsageChange, onOpenFile, onFilesUploaded, onOpenSession, onAskInNewChat, quoteSelectionEnabled = false, storageScope = "", initialPrompt, onInitialPromptConsumed, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const completionNotificationsEnabled = session?.relation?.kind !== "subagent";
@@ -436,18 +438,31 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     }
   }, [onAskInNewChat, quotedSelection, quoteSubmitting, session?.id, sessionIdRef, closeQuotedSelection, unlockAudio]);
 
+  const deliverSend = useCallback(async (message: string, images?: Parameters<typeof handleSend>[1]) => {
+    const ok = await handleSend(message, images);
+    if (ok && session?.id && storageScope) {
+      try {
+        commitPairDelivery(storageScope, session.id, message, window.localStorage);
+        notifyPairChange();
+      } catch {
+        // A failed bookmark must not block the turn that already started.
+      }
+    }
+    return ok;
+  }, [handleSend, session?.id, storageScope]);
+
   const initialPromptSentRef = useRef(false);
   useEffect(() => {
     if (loading || error || !initialPrompt || initialPromptSentRef.current) return;
     initialPromptSentRef.current = true;
-    void Promise.resolve(handleSend(initialPrompt)).then((ok) => {
+    void Promise.resolve(deliverSend(initialPrompt)).then((ok) => {
       if (ok === false) {
         initialPromptSentRef.current = false;
         return;
       }
       onInitialPromptConsumed?.();
     });
-  }, [initialPrompt, loading, error, handleSend, onInitialPromptConsumed]);
+  }, [initialPrompt, loading, error, deliverSend, onInitialPromptConsumed]);
 
   // One sound when a dialog appears with none on screen. A dialog queued behind
   // another one surfaces the moment the user answers that one, so it stays quiet.
@@ -909,7 +924,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   const chatInputElement = (
     <ChatInput
       ref={chatInputRef}
-      onSend={handleSend}
+      onSend={deliverSend}
       onAbort={handleAbort}
       onSteer={agentRunning ? handleSteer : undefined}
       onFollowUp={agentRunning ? handleFollowUp : undefined}

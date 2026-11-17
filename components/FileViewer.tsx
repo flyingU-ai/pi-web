@@ -917,6 +917,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
   const [error, setError] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const syncRequestRef = useRef(0);
+  const pdfIdentityRef = useRef<string | null>(null);
 
   const ext = getFileExt(filePath);
   const isPdf = ext === "pdf";
@@ -930,12 +931,13 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
     setSize(null);
     setError(null);
     setWatching(false);
+    pdfIdentityRef.current = null;
 
     let active = true;
     const requestId = ++syncRequestRef.current;
     fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
       .then((r) => r.json())
-      .then((d: { size?: number; error?: string }) => {
+      .then((d: { size?: number; mtime?: string; error?: string }) => {
         if (!active || requestId !== syncRequestRef.current) return;
         if (d.error) setError(d.error);
         if (typeof d.size === "number") {
@@ -944,6 +946,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
             setError("DOCX too large for preview (>10MB)");
           }
         }
+        if (isPdf) pdfIdentityRef.current = `${d.size ?? ""}|${d.mtime ?? ""}`;
       })
       .catch((nextError) => {
         if (active && requestId === syncRequestRef.current) setError(String(nextError));
@@ -995,13 +998,18 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
 
     es.addEventListener("connected", () => {
       setWatching(true);
-      synchronize();
+      // A reconnect must not rebuild a PDF. Text and office previews still refresh.
+      if (!isPdf) synchronize();
     });
     es.addEventListener("change", (e) => {
       syncRequestRef.current += 1;
+      let nextSize: number | undefined;
+      let nextMtime: string | undefined;
       try {
-        const d = JSON.parse((e as MessageEvent).data) as { size?: number };
+        const d = JSON.parse((e as MessageEvent).data) as { size?: number; mtime?: string };
+        nextMtime = d.mtime;
         if (typeof d.size === "number") {
+          nextSize = d.size;
           setSize(d.size);
           if (!isPdf && d.size > DOCX_PREVIEW_MAX_BYTES) {
             setError("DOCX too large for preview (>10MB)");
@@ -1009,6 +1017,14 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
           }
         }
       } catch { /* ignore */ }
+      if (isPdf) {
+        const nextIdentity = `${nextSize ?? ""}|${nextMtime ?? ""}`;
+        if (pdfIdentityRef.current === null || pdfIdentityRef.current === nextIdentity) {
+          pdfIdentityRef.current = nextIdentity;
+          return;
+        }
+        pdfIdentityRef.current = nextIdentity;
+      }
       setError(null);
       setBust((b) => b + 1);
     });
@@ -1070,7 +1086,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId, initialPage, watchEnab
           </div>
         ) : (
           <iframe
-            key={previewUrl}
+            key={isPdf ? filePath : previewUrl}
             src={previewUrl}
             sandbox={isPdf ? undefined : "allow-same-origin"}
             title={t("i18n.previewFile", { file: getFileName(filePath) })}

@@ -15,6 +15,7 @@ import { applyAdminSshEnvironment } from "./admin-ssh";
 import { bashCommandBlockReason } from "./admin-path-gate";
 import { resolveAgentBashCwd, rewriteVirtualCodeText } from "./dual-roots";
 import { sanitizeWebAdmin, currentWebAdmin } from "./web-admin-scope";
+import { linkAbortSignals, registerBashSteerInterrupt } from "./bash-steer-interrupt";
 
 const HOST_EXTENSION_NAME = "pi-web-project-command-environment";
 const HOST_EXTENSION_PATH = `<inline:${HOST_EXTENSION_NAME}>`;
@@ -222,13 +223,21 @@ export function createProjectCommandBashExtension(options: {
           const next = { ...(params as object), command } as { command: string; timeout?: number };
           if (asked === undefined) delete next.timeout;
           else next.timeout = asked;
-          return executionDefinition.execute(
-            toolCallId,
-            next,
-            signal,
-            onUpdate,
-            context,
-          );
+          // Steer aborts this command only. The agent run keeps going so the
+          // queued intent is still delivered before the next model call.
+          const steerAbort = new AbortController();
+          const releaseSteer = registerBashSteerInterrupt(() => steerAbort.abort());
+          try {
+            return await executionDefinition.execute(
+              toolCallId,
+              next,
+              linkAbortSignals([signal, steerAbort.signal]),
+              onUpdate,
+              context,
+            );
+          } finally {
+            releaseSteer();
+          }
         },
       });
     },

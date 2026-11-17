@@ -1290,6 +1290,7 @@ export function AppShell() {
         onBackgroundTaskDone={handleBackgroundTaskDone}
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
         onSessionsChange={handleSessionsChange}
+        storageScope={scopedWorkspaceKey(selectedSession?.projectKey || selectedSession?.cwd || newSessionCwd || "", adminName)}
       />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
@@ -2444,6 +2445,7 @@ export function AppShell() {
               onAskInNewChat={handleAskInNewChat}
               onStartFreshSession={handleStartFreshSession}
               quoteSelectionEnabled={quoteSelectionEnabled}
+              storageScope={scopedWorkspaceKey(selectedSession?.projectKey || selectedSession?.cwd || newSessionCwd || "", adminName)}
               initialPrompt={
                 pendingFreshPrompt && !selectedSession
                   ? pendingFreshPrompt

@@ -16,6 +16,7 @@ import {
   createProjectCommandBashOperations,
   preferUserBashExtension,
 } from "./project-command-env";
+import { interruptBashForSteer } from "./bash-steer-interrupt";
 import { cacheSessionPath, getLatestModelChange, invalidateSessionListCache, readLatestSessionEntryId, resolveSessionPath } from "./session-reader";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { notifySessionComplete } from "./web-push";
@@ -747,6 +748,10 @@ export class AgentSessionWrapper {
               await this.inner.followUp(command.message as string, promptImages?.length ? promptImages : undefined);
             } else {
               await this.inner.steer(command.message as string, promptImages?.length ? promptImages : undefined);
+              // The intent is already queued. Stop this shell so the model sees it
+              // before the next call, instead of waiting for the command to finish.
+              this.inner.abortBash();
+              interruptBashForSteer();
             }
             return null;
           }
@@ -854,6 +859,10 @@ export class AgentSessionWrapper {
           });
 
           await preflight;
+          if (streamingBehavior === "steer") {
+            if (this.inner.isBashRunning) this.inner.abortBash();
+            interruptBashForSteer();
+          }
           return null;
         } finally {
           releaseAdmission();

@@ -18,11 +18,22 @@ import { DismissButton } from "./DismissButton";
 import { getRelativeFilePath } from "@/lib/file-paths";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { SessionSearch } from "./SessionSearch";
+import { SessionPairBar } from "./SessionPairBar";
+import { orderByPins, pinSession, pinnedSessionIds, unpinSession } from "@/lib/session-pins";
 import { messageForApiFailure } from "@/lib/admin-session-error";
 
 // Fixed row height for the session list. SessionItem renders at exactly this
 // height, so the list can be windowed (only the visible slice is mounted).
 const SESSION_LIST_ITEM_HEIGHT = 54;
+
+function browserPinStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 interface FileManagerAvailability {
   supported: boolean;
@@ -148,6 +159,8 @@ interface Props {
   onBackgroundTaskDone?: () => void;
   onRunningSessionIdsChange?: (ids: Set<string>) => void;
   onSessionsChange?: (sessions: SessionInfo[]) => void;
+  /** Admin + workspace key. Pins and the pair live in this browser under it. */
+  storageScope?: string;
 }
 
 interface WorktreeEntry {
@@ -409,7 +422,7 @@ function PiWebTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, explorerTouchKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, explorerTouchKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange, storageScope = "" }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   // Tracked in a ref only: the version is compared against the polled value to
@@ -1166,7 +1179,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         }
       : null);
 
-  const sessionFamilies = useMemo(() => listSessionFamilies(filteredSessions), [filteredSessions]);
+  const [pinnedIds, setPinnedIds] = useState<string[]>(() => pinnedSessionIds(storageScope, browserPinStorage()));
+  useEffect(() => {
+    setPinnedIds(pinnedSessionIds(storageScope, browserPinStorage()));
+  }, [storageScope]);
+  const sessionFamilies = useMemo(
+    () => orderByPins(listSessionFamilies(filteredSessions), (family) => family.root.id, pinnedIds),
+    [filteredSessions, pinnedIds],
+  );
 
   const virtualIndices = useMemo(() => getSessionListIndices(
     sessionFamilies.length,
@@ -1857,6 +1877,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           overflow: "hidden",
         }}
       >
+        <SessionPairBar
+          scope={storageScope}
+          sessions={filteredSessions}
+          selectedSessionId={selectedSessionId}
+          onSelectSession={handleSelectSessionFromList}
+        />
         <SessionSearch open={sessionSearchOpen} query={sessionSearchQuery} selectedSessionId={selectedSessionId} onSelectSession={handleSelectSessionFromList}>
         <div
           ref={listScrollRef}
@@ -1910,6 +1936,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     isSelected={familySessions.some((session) => session.id === selectedSessionId)}
                     isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
                     isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
+                    isPinned={pinnedIds.includes(family.root.id)}
+                    onTogglePin={() => {
+                      const storage = browserPinStorage();
+                      const next = pinnedIds.includes(family.root.id)
+                        ? unpinSession(storageScope, family.root.id, storage)
+                        : pinSession(storageScope, family.root.id, storage);
+                      setPinnedIds(next);
+                    }}
                     onClick={() => handleSelectSessionFromList(family.root)}
                     onRenamed={loadSessions}
                     onDeleted={(id) => {
@@ -2232,6 +2266,8 @@ function SessionItem({
   isSelected,
   isRunning,
   isUnread,
+  isPinned = false,
+  onTogglePin,
   onClick,
   onRenamed,
   onDeleted,
@@ -2244,6 +2280,8 @@ function SessionItem({
   isSelected: boolean;
   isRunning?: boolean;
   isUnread?: boolean;
+  isPinned?: boolean;
+  onTogglePin?: () => void;
   onClick: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
@@ -2464,7 +2502,7 @@ function SessionItem({
               title={title}
             >
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-                {title}
+                {isPinned ? "📌 " : ""}{title}
               </span>
             </div>
             <div style={{ marginTop: 2, display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
@@ -2518,6 +2556,26 @@ function SessionItem({
           {/* Action buttons — shown on hover */}
           {hovered && !session.transient && (
             <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+              {onTogglePin ? (
+                <button
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onTogglePin();
+                  }}
+                  title={isPinned ? t("sidebar.unpin") : t("sidebar.pin")}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 32, height: 32, padding: 0,
+                    background: "var(--bg-hover)", border: "1px solid var(--border)",
+                    borderRadius: 7, color: isPinned ? "var(--accent)" : "var(--text-muted)",
+                    cursor: "pointer", flexShrink: 0,
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill={isPinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M16 3l5 5-5 1-4 8-2-2-5 5 5-5-2-2 8-4 1-5z" />
+                  </svg>
+                </button>
+              ) : null}
               <button
                 onClick={startRename}
                 title={t("sidebar.rename")}
