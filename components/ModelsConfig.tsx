@@ -105,6 +105,8 @@ interface ProviderEntry {
   baseUrl?: string;
   api?: string;
   apiKey?: string;
+  /** True when this account already stored a key. The value itself is not sent. */
+  apiKeyStored?: boolean;
   headers?: Record<string, string>;
   compat?: Record<string, unknown>;
   models?: ModelEntry[];
@@ -226,14 +228,25 @@ function SecretTextInput({
   return (
     <div style={{ position: "relative", width: "100%", ...style }}>
       <input
-        type={visible ? "text" : "password"}
+        type="text"
+        name="provider-credential"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
         placeholder={placeholder}
-        style={{ ...inputStyle, paddingRight: 34, fontFamily: mono ? "var(--font-mono)" : "inherit" }}
+        style={{
+          ...inputStyle,
+          paddingRight: 34,
+          fontFamily: mono ? "var(--font-mono)" : "inherit",
+          ...({ WebkitTextSecurity: visible ? "none" : "disc" } as React.CSSProperties),
+        }}
         autoComplete={autoComplete}
+        autoCapitalize="off"
+        autoCorrect="off"
         spellCheck={spellCheck}
+        data-1p-ignore="true"
+        data-lpignore="true"
+        data-form-type="other"
       />
       <button
         type="button"
@@ -429,9 +442,11 @@ function ProviderDetail({ name, editingName, provider, onChange, onEditingNameCh
 
       <Field label="API Key">
         <SecretTextInput value={provider.apiKey ?? ""} onChange={(v) => set("apiKey", v || undefined)}
-          placeholder="ENV_VAR_NAME, !shell-command, or literal key" mono />
+          placeholder="留空则保持这个账号已保存的密钥" mono />
         <span style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>
-          Prefix with <code style={{ fontFamily: "var(--font-mono)" }}>!</code> to run a shell command, or use an env var name
+          {provider.apiKeyStored
+            ? "这个账号已保存密钥。留空不会清除，填写才会换掉。"
+            : "密钥只保存在这个账号里，不会写入共享的模型目录。"}
         </span>
       </Field>
 

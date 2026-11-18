@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { PwaRegistration } from "@/components/PwaRegistration";
+import { ADMIN_LEAF_FETCH_SCRIPT } from "@/lib/web-admin-client";
 import { THEME_INIT_SCRIPT } from "@/lib/theme";
 import { PRODUCT_DISPLAY_NAME } from "@/lib/product";
 import "katex/dist/katex.min.css";
@@ -60,6 +61,11 @@ export default function RootLayout({
         <script
           dangerouslySetInnerHTML={{
             __html: THEME_INIT_SCRIPT,
+          }}
+        />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: ADMIN_LEAF_FETCH_SCRIPT,
           }}
         />
       </head>

@@ -1,4 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { isBlockedAdminLeaf } from "@/lib/admin-leaf";
+import { signAdminCookie, ticketSecret, verifyAdminTicket } from "@/lib/admin-ticket";
 import {
   getAuthRetryAfterMs,
   recordAuthFailure,
@@ -14,14 +16,38 @@ import {
   isWebPasswordEnabled,
   PI_WEB_SESSION_COOKIE,
 } from "@/lib/web-auth";
+import { adminCookieIsSigned, leafFromAdminCookie, WEB_ADMIN_COOKIE, WEB_ADMIN_HEADER } from "@/lib/web-admin-scope";
 
 function sanitizeWebAdmin(admin: string): string {
   const name = String(admin || "")
     .trim()
     .replace(/[^A-Za-z0-9._-]+/g, "_")
     .slice(0, 80);
-  if (!name || name === "." || name === "..") return "";
+  if (!name || name === "." || name === ".." || isBlockedAdminLeaf(name)) return "";
   return name;
+}
+
+function isolationEnabled(): boolean {
+  return Boolean(
+    String(process.env.ANNOTATION_WORKSPACE_ROOT || "").trim()
+    || String(process.env.PI_WEB_SESSIONS_ROOT || "").trim()
+    || String(process.env.PI_WEB_TICKET_SECRET || "").trim()
+    || String(process.env.PI_WEB_TICKET_SECRET_FILE || "").trim(),
+  );
+}
+
+function cookieValue(header: string, name: string): string {
+  const prefix = `${name}=`;
+  for (const part of String(header || "").split(";")) {
+    const piece = part.trim();
+    if (!piece.startsWith(prefix)) continue;
+    try {
+      return decodeURIComponent(piece.slice(prefix.length));
+    } catch {
+      return piece.slice(prefix.length);
+    }
+  }
+  return "";
 }
 
 function isSpaNavigation(request: NextRequest): boolean {
@@ -35,7 +61,86 @@ function isSpaNavigation(request: NextRequest): boolean {
   );
 }
 
+function setLeafCookies(response: NextResponse, leaf: string): void {
+  const options = { path: "/", sameSite: "lax" as const, maxAge: 60 * 60 * 24 * 30 };
+  const adminValue = adminCookieIsSigned() ? signAdminCookie(leaf, ticketSecret()) : leaf;
+  response.cookies.set(WEB_ADMIN_COOKIE, adminValue, { ...options, httpOnly: true });
+  response.cookies.set("aoi_leaf", leaf, { ...options, httpOnly: false });
+}
+
+function applyClearCors(request: NextRequest, response: NextResponse): NextResponse {
+  const origin = request.headers.get("origin") || "";
+  let originHost = "";
+  try {
+    originHost = origin ? new URL(origin).hostname : "";
+  } catch {
+    originHost = "";
+  }
+  const host = (request.headers.get("host") || "").replace(/:\d+$/, "");
+  if (!originHost || originHost !== host) return response;
+  response.headers.set("Access-Control-Allow-Origin", origin);
+  response.headers.set("Access-Control-Allow-Credentials", "true");
+  response.headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  response.headers.set("Access-Control-Allow-Headers", "content-type");
+  response.headers.set("Vary", "Origin");
+  return response;
+}
+
+function isAssistantLogout(request: NextRequest): boolean {
+  return request.nextUrl.pathname === "/api/web-admin"
+    && (request.method === "POST" || request.method === "OPTIONS");
+}
+
+function unauthorized(): NextResponse {
+  return new NextResponse("需要从标注平台登录后打开助手", {
+    status: 401,
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
+function leafMismatch(): NextResponse {
+  return new NextResponse("管理员身份不一致", {
+    status: 403,
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
+/** Ticket exchange, or the cookie it already set. `?admin=` does not choose a leaf. */
+function withVerifiedLeaf(request: NextRequest, response: NextResponse): NextResponse {
+  const isApiRequest = request.nextUrl.pathname === "/api"
+    || request.nextUrl.pathname.startsWith("/api/");
+  if (request.nextUrl.pathname === "/api/web-admin" && request.method === "POST") {
+    return response;
+  }
+  const ticket = request.nextUrl.searchParams.get("ticket") || "";
+  const leaf = ticket ? verifyAdminTicket(ticket, ticketSecret()) : "";
+  const cookie = leafFromAdminCookie(cookieValue(request.headers.get("cookie") || "", WEB_ADMIN_COOKIE));
+  const header = sanitizeWebAdmin(request.headers.get(WEB_ADMIN_HEADER) || "");
+  const queryAdmin = sanitizeWebAdmin(request.nextUrl.searchParams.get("admin") || "");
+
+  if (ticket) {
+    if (!leaf) return unauthorized();
+    if ((header && header !== leaf) || (queryAdmin && queryAdmin !== leaf)) return leafMismatch();
+    if (!isApiRequest) {
+      const clean = request.nextUrl.clone();
+      clean.searchParams.delete("ticket");
+      clean.searchParams.delete("admin");
+      const redirected = NextResponse.redirect(clean, 303);
+      setLeafCookies(redirected, leaf);
+      return redirected;
+    }
+    setLeafCookies(response, leaf);
+    return response;
+  }
+
+  if (header && header !== cookie) return leafMismatch();
+  if (queryAdmin && queryAdmin !== cookie) return leafMismatch();
+  if (!cookie) return unauthorized();
+  return response;
+}
+
 function withAdminCookie(request: NextRequest, res: NextResponse): NextResponse {
+  if (isolationEnabled()) return withVerifiedLeaf(request, res);
   const isApiRequest = request.nextUrl.pathname === "/api"
     || request.nextUrl.pathname.startsWith("/api/");
   const admin = sanitizeWebAdmin(request.nextUrl.searchParams.get("admin") || "");
@@ -65,6 +170,12 @@ function tooManyAttempts(retryAfterMs: number): NextResponse {
 }
 
 export function proxy(request: NextRequest) {
+  if (isAssistantLogout(request)) {
+    if (request.method === "OPTIONS") {
+      return applyClearCors(request, new NextResponse(null, { status: 204 }));
+    }
+    return applyClearCors(request, NextResponse.next());
+  }
   const isApiRequest = request.nextUrl.pathname === "/api"
     || request.nextUrl.pathname.startsWith("/api/");
   const isTrustedRequest = isApiRequest

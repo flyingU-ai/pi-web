@@ -6,6 +6,8 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
+import { isBlockedAdminLeaf } from "./admin-leaf";
+import { ticketSecret, verifyAdminCookie } from "./admin-ticket";
 
 export const WEB_ADMIN_COOKIE = "aoi_admin";
 export const WEB_ADMIN_HEADER = "x-aoi-admin";
@@ -48,10 +50,38 @@ export function cookieValue(header: string, name: string): string {
   return "";
 }
 
+/** Lab start exports a ticket secret. Unsigned `aoi_admin=<leaf>` is then rejected. */
+export function adminCookieIsSigned(): boolean {
+  return Boolean(
+    String(process.env.PI_WEB_TICKET_SECRET || "").trim()
+    || String(process.env.PI_WEB_TICKET_SECRET_FILE || "").trim(),
+  );
+}
+
+/** Leaf inside the login cookie. Empty when a required signature is missing or forged. */
+export function leafFromAdminCookie(raw: string): string {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  if (!adminCookieIsSigned()) return sanitizeWebAdmin(value);
+  return verifyAdminCookie(value, ticketSecret());
+}
+
+/**
+ * The httpOnly cookie is the login. A request header or `?admin=` cannot
+ * choose a leaf. A header that names someone else fails closed.
+ */
 export function adminFromRequest(req: Request): string {
   const header = sanitizeWebAdmin(req.headers.get(WEB_ADMIN_HEADER) || "");
-  const cookie = sanitizeWebAdmin(cookieValue(req.headers.get("cookie") || "", WEB_ADMIN_COOKIE));
-  return header || cookie;
+  const cookie = leafFromAdminCookie(cookieValue(req.headers.get("cookie") || "", WEB_ADMIN_COOKIE));
+  if (!cookie || isBlockedAdminLeaf(cookie)) return "";
+  if (header && header !== cookie) return "";
+  try {
+    const query = sanitizeWebAdmin(new URL(req.url).searchParams.get("admin") || "");
+    if (query && query !== cookie) return "";
+  } catch {
+    // Requests without an absolute URL still have the cookie.
+  }
+  return cookie;
 }
 
 export function withWebAdmin<T>(req: Request, fn: () => T): T {
@@ -69,8 +99,9 @@ export function sessionsStoreRoot(warehouse = warehouseRoot()): string {
 }
 
 export function scopedSessionsDir(admin: string, warehouse = warehouseRoot()): string {
-  const name = sanitizeWebAdmin(admin) || NO_ADMIN_LEAF;
-  return resolvePath(sessionsStoreRoot(warehouse), name, "pi");
+  const name = sanitizeWebAdmin(admin);
+  const leaf = !name || isBlockedAdminLeaf(name) ? NO_ADMIN_LEAF : name;
+  return resolvePath(sessionsStoreRoot(warehouse), leaf, "pi");
 }
 
 /** Admin leaf of `PI_WEB_SESSIONS_ROOT/<admin>/pi/<file>`. Empty when the file is elsewhere. */
@@ -97,7 +128,7 @@ export function isHostPrivateAdminPath(target: string, warehouse = warehouseRoot
 /** Per-admin provider keys. Empty when there is no warehouse identity (tests / CLI-like). */
 export function scopedAuthPath(admin: string, warehouse = warehouseRoot()): string {
   const name = sanitizeWebAdmin(admin);
-  if (!warehouse || !name) return "";
+  if (!warehouse || !name || isBlockedAdminLeaf(name)) return "";
   return resolvePath(sessionsStoreRoot(warehouse), name, "auth.json");
 }
 
@@ -120,10 +151,11 @@ async function adminFromNextHeaders(): Promise<string> {
     const fromHeader = sanitizeWebAdmin(
       (headerStore as { get?: (n: string) => string | null }).get?.(WEB_ADMIN_HEADER) || "",
     );
-    const fromCookie = sanitizeWebAdmin(
+    const fromCookie = leafFromAdminCookie(
       (cookieStore as { get?: (n: string) => { value?: string } | undefined }).get?.(WEB_ADMIN_COOKIE)?.value || "",
     );
-    return fromHeader || fromCookie;
+    if (fromHeader && fromHeader !== fromCookie) return "";
+    return fromCookie;
   } catch {
     return "";
   }

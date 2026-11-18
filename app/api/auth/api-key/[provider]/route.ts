@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { invalidateModelsCache } from "@/lib/models-cache";
 import { removeStoredCredentialIfType, storeProviderCredential } from "@/lib/provider-credential-store";
 import { createModelRuntimeWithExtensions, resolveAdminAuthPath } from "@/lib/model-runtime";
+import { applyAdminRuntimeApiKey } from "@/lib/rpc-manager";
+import { resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +42,12 @@ export async function POST(req: Request, { params }: Params) {
     // ModelRuntime.login() persists the credential and then performs an
     // unbounded network catalog refresh. Store the returned credential
     // directly so a slow catalog cannot leave the save request hanging.
+    const admin = await resolveCurrentAdminAsync();
+    if (!admin) {
+      return NextResponse.json({ error: "admin required" }, { status: 401 });
+    }
     await storeProviderCredential(provider, credential, await resolveAdminAuthPath());
+    await applyAdminRuntimeApiKey(admin, provider, apiKey.trim());
     invalidateModelsCache();
     return NextResponse.json({ success: true });
   } catch (error) {

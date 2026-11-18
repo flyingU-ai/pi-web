@@ -4,11 +4,12 @@ import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@e
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "fs";
 import { resolve } from "path";
-import { adminFromSessionFile, currentWebAdmin, fileIsUnder, resolveWebSessionDir, resolveWebSessionDirAsync } from "./web-admin-scope";
+import { adminFromSessionFile, currentWebAdmin, fileIsUnder, resolveWebSessionDir, resolveWebSessionDirAsync, sanitizeWebAdmin, scopedSessionsDir } from "./web-admin-scope";
 import { validateAgentImages } from "./image-attachments";
 import { invalidateModelsCache } from "./models-cache";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
 import { findDeferredModel, rememberProviderModels } from "./deferred-provider-models";
+import { enabledModelsForAdmin } from "./admin-enabled-models";
 import { createAdminModelRuntime } from "./model-runtime";
 import { createAdminPathGateExtension } from "./admin-path-gate";
 import {
@@ -2082,8 +2083,27 @@ function rpcVisibleInScope(session: { sessionFile?: string; inner?: { sessionMan
   const dir = resolveWebSessionDir();
   if (!dir) return true;
   const file = session.inner?.sessionManager?.getSessionFile?.() || session.sessionFile || "";
-  if (!file) return true;
+  if (!file) return false;
   return fileIsUnder(file, dir);
+}
+
+/** Put a just-saved provider key onto this leaf's already-open sessions only. */
+export async function applyAdminRuntimeApiKey(admin: string, providerId: string, apiKey: string): Promise<void> {
+  const leaf = sanitizeWebAdmin(admin);
+  const key = String(apiKey || "");
+  if (!leaf || !providerId || !key) return;
+  const dir = scopedSessionsDir(leaf);
+  for (const session of getRegistry().values()) {
+    const file = session.sessionFile || "";
+    if (!file || !fileIsUnder(file, dir)) continue;
+    const runtime = session.inner.modelRuntime as { setRuntimeApiKey?: (id: string, value: string) => Promise<void> };
+    if (!runtime?.setRuntimeApiKey) continue;
+    try {
+      await runtime.setRuntimeApiKey(providerId, key);
+    } catch {
+      // The open session may not list this provider yet. The next message reloads it.
+    }
+  }
 }
 
 export function getRpcSession(sessionId: string): AgentSessionWrapper | undefined {
@@ -2456,7 +2476,10 @@ export async function startRpcSession(
     });
     const scope = await resolveVisibleModels(
       services.modelRuntime,
-      services.settingsManager.getEnabledModels(),
+      enabledModelsForAdmin(
+        services.settingsManager,
+        adminFromSessionFile(sessionFile) || currentWebAdmin(),
+      ),
     );
     // A provider an extension registers only at session_start (lib/deferred-provider-models.ts)
     // has no model in this runtime yet: build on the default, switch once extensions are bound.

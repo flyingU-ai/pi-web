@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { writePrivateFileAtomicSync } from "./atomic-file";
@@ -62,6 +62,16 @@ export function getModelsConfigPath(): string {
   return join(getAgentDir(), "models.json");
 }
 
+/** A symlink stays a symlink. Writing the path itself would replace the shared catalog. */
+function writableModelsPath(modelsPath: string): string {
+  try {
+    if (lstatSync(modelsPath).isSymbolicLink()) return realpathSync(modelsPath);
+  } catch {
+    // The file is created on the requested path.
+  }
+  return modelsPath;
+}
+
 /** models.json exists but its contents cannot be used, so it must not be replaced. */
 export class ModelsConfigReadError extends Error {
   constructor(message: string) {
@@ -105,9 +115,10 @@ export function writeModelsConfig(
   // Refuse to replace a file this panel could not read: the draft being saved
   // was not built from it, so writing would silently discard its contents.
   readModelsConfig(modelsPath);
-  const dir = dirname(modelsPath);
+  const target = writableModelsPath(modelsPath);
+  const dir = dirname(target);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const normalized = normalizeModelsConfigCosts(sanitizeModelsConfig(data));
-  writePrivateFileAtomicSync(modelsPath, JSON.stringify(normalized, null, 2));
+  writePrivateFileAtomicSync(target, JSON.stringify(normalized, null, 2));
   invalidateModelsCache();
 }

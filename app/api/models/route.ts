@@ -12,7 +12,9 @@ import { resolveVisibleModels, selectInitialModelScope } from "@/lib/model-scope
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { projectTrustReloadOptions } from "@/lib/project-trust";
 import { rememberProviderModels, withDeferredProviderModels } from "@/lib/deferred-provider-models";
+import { enabledModelsForAdmin } from "@/lib/admin-enabled-models";
 import { createAdminModelRuntime } from "@/lib/model-runtime";
+import { resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +29,7 @@ function compareModelEntries(
     || modelNameCollator.compare(a.id, b.id);
 }
 
-async function loadModels(cwd: string): Promise<ModelsData> {
+async function loadModels(cwd: string, admin: string): Promise<ModelsData> {
   const nameMap = new Map<string, string>();
   let modelList: { id: string; name: string; provider: string }[] = [];
   let defaultModel: { provider: string; modelId: string } | null = null;
@@ -52,7 +54,7 @@ async function loadModels(cwd: string): Promise<ModelsData> {
   // way the CLI does instead of comparing pattern strings literally (#307).
   const scope = await resolveVisibleModels(
     withDeferredProviderModels(services.modelRuntime),
-    settings.getEnabledModels(),
+    enabledModelsForAdmin(settings, admin),
   );
   const { visible, thinkingLevelPins, warnings } = scope;
   modelList = visible.map((m) => ({
@@ -131,7 +133,8 @@ export async function GET(req: Request) {
   }
 
   try {
-    return Response.json(await loadModelsWithCache(cwd, () => loadModels(cwd)));
+    const admin = await resolveCurrentAdminAsync();
+    return Response.json(await loadModelsWithCache(`${cwd}\0${admin}`, () => loadModels(cwd, admin)));
   } catch {
     return Response.json(withSafeModelLoadFailure(EMPTY_MODELS));
   }
