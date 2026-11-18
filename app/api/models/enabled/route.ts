@@ -22,7 +22,7 @@ import {
   type EnabledModelsView,
 } from "@/lib/enabled-models-runtime";
 import type { EnabledModelsInput } from "@/lib/enabled-models";
-import { readAdminEnabledModels, writeAdminEnabledModels, adminEnabledModelsPath } from "@/lib/admin-enabled-models";
+import { writeAdminEnabledModels, adminEnabledModelsPath, enabledModelsForAdmin, readAdminCredentialProviders, withStoredProviderCatalog } from "@/lib/admin-enabled-models";
 import { createModelRuntimeWithExtensions } from "@/lib/model-runtime";
 import { resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 import { withDeferredProviderModels } from "@/lib/deferred-provider-models";
@@ -37,25 +37,31 @@ interface RequestContext {
   settingsManager: SettingsManager;
   /** Where the two settings files live, for the banner to name one. */
   paths: { cwd: string; agentDir: string };
+  admin: string;
 }
 
 async function loadContext(cwd: string): Promise<RequestContext> {
-  const modelRuntime = withDeferredProviderModels(await createModelRuntimeWithExtensions());
+  const admin = await resolveCurrentAdminAsync();
+  const modelRuntime = withStoredProviderCatalog(
+    withDeferredProviderModels(await createModelRuntimeWithExtensions()),
+    readAdminCredentialProviders(admin),
+  );
   const agentDir = getAgentDir();
   return {
     modelRuntime,
     models: await modelRuntime.getAvailable(),
     settingsManager: SettingsManager.create(cwd, agentDir),
     paths: { cwd, agentDir },
+    admin,
   };
 }
 
-async function buildView(context: RequestContext, admin: string): Promise<EnabledModelsView> {
+async function buildView(context: RequestContext): Promise<EnabledModelsView> {
   const shared = readEnabledModelsSettings(context.settingsManager, context.paths);
-  const overlay = readAdminEnabledModels(admin);
-  const patterns = overlay ?? shared.patterns;
-  const scope = overlay ? "global" as const : shared.scope;
-  const path = overlay ? adminEnabledModelsPath(admin) : shared.path;
+  const patterns = enabledModelsForAdmin(context.settingsManager, context.admin) ?? shared.patterns;
+  const path = context.admin
+    ? (adminEnabledModelsPath(context.admin) || shared.path)
+    : shared.path;
   const input = await buildEnabledModelsInput(patterns, context.models);
   const providerNames = new Map(
     context.modelRuntime.getProviders().map((provider) => [provider.id, provider.name]),
@@ -66,7 +72,7 @@ async function buildView(context: RequestContext, admin: string): Promise<Enable
     models: context.models,
     providerNames,
     customProviders: customProviderIds(context.modelRuntime),
-    scope,
+    scope: context.admin ? "global" : shared.scope,
     settingsPath: path,
     ...(modelError ? { modelError } : {}),
   });
@@ -102,7 +108,7 @@ export async function GET(req: Request) {
 
   try {
     const context = await loadContext(resolved.cwd);
-    return Response.json(await buildView(context, await resolveCurrentAdminAsync()));
+    return Response.json(await buildView(context));
   } catch (error) {
     return Response.json({ error: String(error) }, { status: 500 });
   }
@@ -211,9 +217,8 @@ export async function PUT(req: Request) {
 
   try {
     const context = await loadContext(resolved.cwd);
-    const admin = await resolveCurrentAdminAsync();
+    const admin = context.admin;
     const shared = readEnabledModelsSettings(context.settingsManager, context.paths);
-    const overlay = readAdminEnabledModels(admin);
     if (!admin && shared.scope === "project") {
       return Response.json(
         { error: "Project settings override enabledModels", reason: "project-scope" },
@@ -221,7 +226,11 @@ export async function PUT(req: Request) {
       );
     }
 
-    const input = await buildEnabledModelsInput(overlay ?? shared.patterns, context.models, { withProviderGlobs: true });
+    const input = await buildEnabledModelsInput(
+      enabledModelsForAdmin(context.settingsManager, admin) ?? shared.patterns,
+      context.models,
+      { withProviderGlobs: true },
+    );
     let edit;
     if (op === "clear") {
       edit = clearEnabledModels(input);
@@ -266,7 +275,7 @@ export async function PUT(req: Request) {
       invalidateModelsCache();
     }
 
-    return Response.json(await buildView(context, admin));
+    return Response.json(await buildView(context));
   } catch (error) {
     return Response.json({ error: String(error) }, { status: 500 });
   }

@@ -1170,6 +1170,13 @@ function TextFileViewer({
   const [displayMode, setDisplayMode] = useState<DisplayMode>(requestedInitialDisplayMode);
   const [wrapLines, setWrapLines] = useState(initialWrapLines);
   const [watching, setWatching] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [savedContent, setSavedContent] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveHint, setSaveHint] = useState("");
+  const dirty = draft !== savedContent;
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
   const esRef = useRef<EventSource | null>(null);
   const contentRequestRef = useRef(0);
   const gitDiffRequestRef = useRef(0);
@@ -1240,9 +1247,17 @@ function TextFileViewer({
           return null;
         }
         setError(null);
-        setData((current) => offset && current
-          ? { ...d, content: current.content + d.content }
-          : d);
+        setData((current) => {
+          const next = offset && current
+            ? { ...d, content: current.content + d.content }
+            : d;
+          if (!next.truncated) {
+            setDraft(next.content);
+            setSavedContent(next.content);
+            setSaveHint("");
+          }
+          return next;
+        });
         return d;
       })
       .catch((e) => {
@@ -1309,6 +1324,7 @@ function TextFileViewer({
     if (!watchEnabled) return;
 
     const synchronize = () => {
+      if (dirtyRef.current) return;
       void fetchContent(filePath);
       void fetchGitDiff(filePath);
     };
@@ -1358,26 +1374,62 @@ function TextFileViewer({
 
   const hasGitDiff = gitDiff?.supported === true && typeof gitDiff.patch === "string";
   const isDeletedDiff = hasGitDiff && gitDiff.status === "deleted";
+  const canEditSource = Boolean(
+    data
+    && !data.truncated
+    && !isDeletedDiff
+    && !isImagePath(filePath)
+    && !isAudioPath(filePath)
+    && !isVideoPath(filePath)
+    && !isDocumentPreviewPath(filePath)
+    && data.language !== "binary",
+  );
+
+  const saveDraft = useCallback(async () => {
+    if (!canEditSource || !dirty || saving) return;
+    setSaving(true);
+    setSaveHint("");
+    try {
+      const res = await fetch(`/api/files/${encodeFilePathForApi(filePath)}?type=mutate`, adminFetchInit({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "write", content: draft }),
+      }));
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setSavedContent(draft);
+      setData((current) => current ? { ...current, content: draft, size: new TextEncoder().encode(draft).length } : current);
+      setSaveHint("saved");
+    } catch (err) {
+      setSaveHint(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }, [canEditSource, dirty, saving, filePath, draft]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") return;
+      if (!canEditSource) return;
+      event.preventDefault();
+      void saveDraft();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canEditSource, saveDraft]);
 
   useEffect(() => {
     if (gitDiffResolved && !hasGitDiff && displayMode === "diff") updateDisplayMode("source");
   }, [displayMode, gitDiffResolved, hasGitDiff, updateDisplayMode]);
 
-  // Wait for the git request before restoring diff mode so the unresolved
-  // placeholder cannot immediately demote it back to source.
+  // Diff is a tab, not the default. Opening a file should land on an editable
+  // source view (markdown/html still prefer preview).
   useEffect(() => {
     if (!hasGitDiff || autoDiffAppliedRef.current) return;
-    const preferDiff = requestedInitialDisplayMode === "diff"
-      || (
-        defaultPreviewEligibleRef.current
-        && requestedInitialDisplayMode !== "preview"
-        && data?.language !== "markdown"
-        && data?.language !== "html"
-      );
-    if (!preferDiff) return;
+    if (requestedInitialDisplayMode !== "diff") return;
     autoDiffAppliedRef.current = true;
     updateDisplayMode("diff");
-  }, [requestedInitialDisplayMode, hasGitDiff, updateDisplayMode, data?.language]);
+  }, [requestedInitialDisplayMode, hasGitDiff, updateDisplayMode]);
 
   const markdownPreview = useMemo(
     () => (data?.language === "markdown" ? normalizeDisplayMath(data.content) : ""),
@@ -1624,7 +1676,7 @@ function TextFileViewer({
                       color: active ? "var(--text)" : "var(--text-muted)",
                     }}
                   >
-                    {DISPLAY_MODE_LABELS[mode]}
+                    {mode === "source" && canEditSource ? t("files.edit") : DISPLAY_MODE_LABELS[mode]}
                   </button>
                 );
               })}
@@ -1657,6 +1709,29 @@ function TextFileViewer({
               >
                 <MentionIcon />
               </button>
+            )}
+            {effectiveDisplayMode === "source" && canEditSource && (
+              <>
+                {dirty ? <span style={{ color: "var(--text-muted)" }}>{t("files.unsaved")}</span> : null}
+                {saveHint === "saved" ? <span>{t("files.saved")}</span> : null}
+                {saveHint && saveHint !== "saved" ? <span style={{ color: "#f87171" }}>{t("files.saveFailed", { error: saveHint })}</span> : null}
+                <button
+                  type="button"
+                  disabled={!dirty || saving}
+                  onClick={() => void saveDraft()}
+                  className="file-viewer-mode-button"
+                >
+                  {saving ? t("i18n.saving") : t("files.save")}
+                </button>
+                <button
+                  type="button"
+                  disabled={!dirty || saving}
+                  onClick={() => { setDraft(savedContent); setSaveHint(""); }}
+                  className="file-viewer-mode-button"
+                >
+                  {t("files.revert")}
+                </button>
+              </>
             )}
             {effectiveDisplayMode === "source" && (
               <>
@@ -1801,6 +1876,36 @@ function TextFileViewer({
             >
               {markdownPreview}
             </ReactMarkdown>
+          </div>
+        ) : effectiveDisplayMode === "source" && canEditSource ? (
+          <div style={{ display: "flex", alignItems: "stretch", minHeight: "100%", width: wrapLines ? "100%" : "max-content", minWidth: "100%" }}>
+            <div aria-hidden style={{ ...FILE_LINE_NUMBER_STYLE, lineHeight: "20.8px", paddingTop: 12 }}>
+              {draft.split("\n").map((_, index) => (
+                <div key={index}>{index + 1}</div>
+              ))}
+            </div>
+            <textarea
+              value={draft}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                if (saveHint === "saved") setSaveHint("");
+              }}
+              spellCheck={false}
+              aria-label={t("files.edit")}
+              style={{
+                flex: 1,
+                minHeight: "100%",
+                border: "none",
+                outline: "none",
+                resize: "none",
+                padding: "12px 16px",
+                background: "var(--bg)",
+                color: "var(--text)",
+                whiteSpace: wrapLines ? "pre-wrap" : "pre",
+                overflow: "hidden",
+                ...FILE_CODE_STYLE,
+              }}
+            />
           </div>
         ) : useLightweightSource ? (
           <div

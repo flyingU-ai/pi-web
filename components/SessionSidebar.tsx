@@ -18,7 +18,7 @@ import { DismissButton } from "./DismissButton";
 import { getRelativeFilePath } from "@/lib/file-paths";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { SessionSearch } from "./SessionSearch";
-import { SessionPairBar } from "./SessionPairBar";
+import { cycleSeat, notifyPairChange, PAIR_CHANGE_EVENT, readPair, seatOf, writePair, type SessionPair } from "@/lib/session-pair";
 import { orderByPins, pinSession, pinnedSessionIds, unpinSession } from "@/lib/session-pins";
 import { messageForApiFailure } from "@/lib/admin-session-error";
 
@@ -556,7 +556,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         cache: "no-store",
       });
       if (!res.ok) {
-        throw new Error(res.status === 401 ? t("sidebar.adminRequired") : await messageForApiFailure(res));
+        throw new Error(res.status === 401 || res.status === 403 ? t("sidebar.adminRequired") : await messageForApiFailure(res));
       }
       const data = await res.json() as {
         sessions: SessionInfo[];
@@ -1180,8 +1180,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       : null);
 
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => pinnedSessionIds(storageScope, browserPinStorage()));
+  const [sessionPair, setSessionPair] = useState<SessionPair | null>(null);
   useEffect(() => {
     setPinnedIds(pinnedSessionIds(storageScope, browserPinStorage()));
+    setSessionPair(readPair(storageScope, browserPinStorage()));
+  }, [storageScope]);
+  useEffect(() => {
+    const refresh = () => setSessionPair(readPair(storageScope, browserPinStorage()));
+    window.addEventListener(PAIR_CHANGE_EVENT, refresh);
+    return () => window.removeEventListener(PAIR_CHANGE_EVENT, refresh);
   }, [storageScope]);
   const sessionFamilies = useMemo(
     () => orderByPins(listSessionFamilies(filteredSessions), (family) => family.root.id, pinnedIds),
@@ -1877,12 +1884,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           overflow: "hidden",
         }}
       >
-        <SessionPairBar
-          scope={storageScope}
-          sessions={filteredSessions}
-          selectedSessionId={selectedSessionId}
-          onSelectSession={handleSelectSessionFromList}
-        />
         <SessionSearch open={sessionSearchOpen} query={sessionSearchQuery} selectedSessionId={selectedSessionId} onSelectSession={handleSelectSessionFromList}>
         <div
           ref={listScrollRef}
@@ -1937,6 +1938,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
                     isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
                     isPinned={pinnedIds.includes(family.root.id)}
+                    pairSeat={seatOf(sessionPair, family.root.id)}
+                    onCycleSeat={() => {
+                      const next = cycleSeat(sessionPair, family.root.id);
+                      writePair(storageScope, next, browserPinStorage());
+                      notifyPairChange();
+                      setSessionPair(next);
+                    }}
                     onTogglePin={() => {
                       const storage = browserPinStorage();
                       const next = pinnedIds.includes(family.root.id)
@@ -2267,6 +2275,8 @@ function SessionItem({
   isRunning,
   isUnread,
   isPinned = false,
+  pairSeat = null,
+  onCycleSeat,
   onTogglePin,
   onClick,
   onRenamed,
@@ -2281,6 +2291,8 @@ function SessionItem({
   isRunning?: boolean;
   isUnread?: boolean;
   isPinned?: boolean;
+  pairSeat?: "master" | "slave" | null;
+  onCycleSeat?: () => void;
   onTogglePin?: () => void;
   onClick: () => void;
   onRenamed?: () => void;
@@ -2552,6 +2564,25 @@ function SessionItem({
               </svg>
             </button>
           )}
+
+          {(pairSeat || (hovered && !session.transient)) && onCycleSeat ? (
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                onCycleSeat();
+              }}
+              title={pairSeat === "master" ? t("pair.master") : pairSeat === "slave" ? t("pair.slave") : t("pair.roleEmpty")}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 22, height: 22, padding: 0, flexShrink: 0,
+                background: "none", border: "1px solid var(--border)",
+                borderRadius: 4, color: pairSeat ? "var(--accent)" : "var(--text-muted)",
+                cursor: "pointer", fontSize: 11, fontWeight: 700,
+              }}
+            >
+              {pairSeat === "slave" ? "S" : "M"}
+            </button>
+          ) : null}
 
           {/* Action buttons — shown on hover */}
           {hovered && !session.transient && (

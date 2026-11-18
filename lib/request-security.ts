@@ -51,6 +51,33 @@ function configuredHostnamesFromEnvironment(): string[] {
   ].filter((value): value is string => Boolean(value?.trim()));
 }
 
+const LAB_FRONT_PORTS = new Set(["5174", "5184", "8001", "8800"]);
+
+function configuredLabOrigins(): string[] {
+  return [
+    ...(process.env.PI_WEB_LAB_ORIGINS?.split(",") ?? []),
+    ...(process.env.PI_WEB_ALLOWED_ORIGINS?.split(",") ?? []),
+  ].map((value) => value.trim()).filter(Boolean);
+}
+
+/** :5184 / :5174 on the same host as this assistant, plus explicit env origins. */
+export function isLabFrontOrigin(origin: string, request: Request): boolean {
+  const wanted = canonicalOrigin(origin);
+  if (!wanted) return false;
+  for (const raw of configuredLabOrigins()) {
+    if (canonicalOrigin(raw) === wanted) return true;
+  }
+  const host = hostnameFromAuthority(request.headers.get("host") || "");
+  if (!host) return false;
+  try {
+    const parsed = new URL(origin);
+    if (normalizeHostname(parsed.hostname) !== host) return false;
+    return LAB_FRONT_PORTS.has(parsed.port);
+  } catch {
+    return false;
+  }
+}
+
 function canonicalOrigin(value: string): string | null {
   try {
     return new URL(value).origin;
@@ -132,6 +159,7 @@ function isProxyRewrittenSameOrigin(request: Request, origin: string): boolean {
 export function isApiRequestOriginAllowed(request: Request): boolean {
   const origin = request.headers.get("origin");
   const fetchSite = request.headers.get("sec-fetch-site");
+  if (origin && isLabFrontOrigin(origin, request)) return true;
   if (fetchSite === "cross-site") return false;
   if (!origin) return true;
 

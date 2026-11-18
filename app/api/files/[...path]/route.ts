@@ -40,6 +40,7 @@ import {
   VIRTUAL_CODE_DIR,
   VIRTUAL_CODE_HOME,
 } from "@/lib/dual-roots";
+import { annotateDataZoneBands } from "@/lib/data-zone-catalog";
 import { isDatePoolRoot } from "@/lib/web-bash-guard";
 import { isDataTreeCodeZoneName } from "@/lib/admin-workspaces";
 import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
@@ -726,8 +727,16 @@ export async function GET(
 
     // Avoid per-entry stat calls for normal files and directories. Symlinks and
     // filesystems without directory type information use the stat fallback.
+    const listQuery = String(request.nextUrl.searchParams.get("q") || "").trim().toLowerCase();
     let dirents = fs.readdirSync(filePath, { withFileTypes: true });
+    const totalBeforeFilter = dirents.length;
+    if (listQuery) {
+      dirents = dirents.filter((d) => d.name.toLowerCase().includes(listQuery));
+    }
+    const matchedCount = dirents.length;
+    let truncated = false;
     if (isPoolHeavyDir(filePath) && dirents.length > 80) {
+      truncated = true;
       const keep = dirents.filter((d) => d.name.startsWith("pool_distribution"));
       const rest = dirents.filter((d) => !d.name.startsWith("pool_distribution")).slice(0, 80);
       dirents = [...keep, ...rest];
@@ -769,12 +778,22 @@ export async function GET(
           entries.unshift({ name: VIRTUAL_CODE_DIR, isDir: true, size: 0, modified: "" });
         }
       }
+      const code = entries.filter((entry) => entry.name === VIRTUAL_CODE_DIR);
+      const data = annotateDataZoneBands(
+        requestedPath,
+        entries.filter((entry) => entry.name !== VIRTUAL_CODE_DIR),
+      );
+      entries.splice(0, entries.length, ...code, ...data);
     }
 
     return NextResponse.json({
       entries: withOutsideLinkTargets(filePath, entries, dirents, allowedRoots),
       path: filePath,
       codeMount,
+      truncated,
+      hidden: Math.max(0, matchedCount - dirents.length),
+      total: totalBeforeFilter,
+      q: listQuery || undefined,
     });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

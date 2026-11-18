@@ -11,6 +11,8 @@ import { readModelsConfig, writeModelsConfig } from "./models-config-store";
 
 export const LOCAL_PROVIDER_IDS = new Set(["llamacpp", "llamacpp-gguf"]);
 
+const SECRET_HEADER = /^(authorization|proxy-authorization|api-key|x-api-key)$/i;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -65,15 +67,54 @@ export function stripProviderApiKeys(data: Record<string, unknown>): {
       keys[id] = provider.apiKey.trim();
     }
     delete provider.apiKey;
+    delete provider.apiKeyStored;
+    const headers = publicHeaders(provider.headers);
+    if (headers) provider.headers = headers;
+    else delete provider.headers;
   }
   return { config, keys };
 }
 
+function publicHeaders(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const kept: Record<string, unknown> = {};
+  for (const [name, header] of Object.entries(value)) {
+    if (SECRET_HEADER.test(name)) continue;
+    kept[name] = header;
+  }
+  return Object.keys(kept).length > 0 ? kept : undefined;
+}
+
+/**
+ * The browser may edit the model list. An existing provider keeps the baseUrl
+ * already on disk, and authentication headers never come from the request.
+ */
+export function lockSharedEndpoints(
+  incoming: Record<string, unknown>,
+  current: Record<string, unknown>,
+): Record<string, unknown> {
+  const config = structuredClone(incoming);
+  const currentProviders = isRecord(current.providers) ? current.providers : {};
+  if (!isRecord(config.providers)) return config;
+  for (const [id, provider] of Object.entries(config.providers)) {
+    if (!isRecord(provider)) continue;
+    delete provider.apiKey;
+    delete provider.apiKeyStored;
+    const previous = currentProviders[id];
+    if (isRecord(previous) && "baseUrl" in previous) provider.baseUrl = previous.baseUrl;
+    const headers = publicHeaders(isRecord(previous) ? previous.headers : undefined);
+    if (headers) provider.headers = headers;
+    else delete provider.headers;
+  }
+  return config;
+}
+
 export function markStoredApiKeys(data: Record<string, unknown>, storedIds: ReadonlySet<string>): Record<string, unknown> {
-  if (!isRecord(data.providers) || storedIds.size === 0) return data;
+  if (!isRecord(data.providers)) return data;
   for (const [id, provider] of Object.entries(data.providers)) {
-    if (!isRecord(provider) || !storedIds.has(id)) continue;
-    provider.apiKeyStored = true;
+    if (!isRecord(provider)) continue;
+    if (storedIds.has(id)) provider.apiKeyStored = true;
+    else delete provider.apiKeyStored;
   }
   return data;
 }
@@ -107,7 +148,10 @@ export function detachSharedProviderApiKeys(
   if (!existsSync(modelsPath)) return;
   const current = readModelsConfig(modelsPath);
   const { config, keys } = stripProviderApiKeys(current);
-  if (Object.keys(keys).length === 0) return;
+  if (Object.keys(keys).length === 0) {
+    if (JSON.stringify(config) !== JSON.stringify(current)) writeModelsConfig(config, modelsPath);
+    return;
+  }
   const secretPaths = [join(dirname(modelsPath), "provider-runtime-secrets.json")];
   const sharedSecrets = localProviderSecretsPath(modelsPath);
   if (!secretPaths.includes(sharedSecrets)) secretPaths.push(sharedSecrets);

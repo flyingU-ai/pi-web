@@ -29,7 +29,10 @@ import type { AppUpdateResponse } from "@/lib/api-types";
 import type { ToolEntry } from "@/lib/tool-presets";
 import type { SettingsSection } from "@/lib/settings-navigation";
 import { findChatScrollAnchor, type ChatScrollPosition } from "@/lib/chat-scroll-position";
-import { commitPairDelivery, notifyPairChange } from "@/lib/session-pair";
+import { commitPairDelivery, listUserTurns, mergePairDraft, nextPairSelection, notifyPairChange, otherSeat, PAIR_CHANGE_EVENT, readPair, seatOf, stripUnsentPack, writePair, type SessionPair, type UserTurn } from "@/lib/session-pair";
+import { buildPairDraft, PAIR_RANGE_SHORT } from "@/lib/pair-context";
+import { getDraft, setDraft } from "@/lib/draft-store";
+import { latestAssistantUsage } from "@/lib/session-stats";
 import {
   captureScrollDistance,
   getPromptAnchorSpacerHeight,
@@ -238,6 +241,15 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
 
 export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initialScrollPosition, onScrollPositionChange, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onFilesystemMaybeChanged, onAttentionNeeded, onSessionCreated, onSessionForked, onStartFreshSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onOpenSettings, onContextUsageChange, onOpenFile, onFilesUploaded, onOpenSession, onAskInNewChat, quoteSelectionEnabled = false, storageScope = "", initialPrompt, onInitialPromptConsumed, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio }: Props) {
   const { t } = useI18n();
+  const [sessionPair, setSessionPair] = useState<SessionPair | null>(null);
+  const [pairHint, setPairHint] = useState<string | null>(null);
+  useEffect(() => {
+    const storage = typeof window === "undefined" ? null : window.localStorage;
+    setSessionPair(readPair(storageScope, storage));
+    const refresh = () => setSessionPair(readPair(storageScope, storage));
+    window.addEventListener(PAIR_CHANGE_EVENT, refresh);
+    return () => window.removeEventListener(PAIR_CHANGE_EVENT, refresh);
+  }, [storageScope]);
   const isMobile = useIsMobile();
   const completionNotificationsEnabled = session?.relation?.kind !== "subagent";
 
@@ -294,6 +306,125 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     deferInitialScroll: Boolean(pendingScrollRestore),
   });
   const sessionBusy = agentRunning || bashRunning;
+  const pairSeat = seatOf(sessionPair, session?.id || "");
+  const userTurns = useMemo(() => listUserTurns(messages, entryIds), [messages, entryIds]);
+  const pairStartIndex = session?.id && sessionPair?.rangeStart?.[session.id]
+    ? userTurns.findIndex((turn) => turn.userEntryId === sessionPair.rangeStart?.[session.id])
+    : -1;
+  const pairEndIndex = session?.id && sessionPair?.rangeEnd?.[session.id]
+    ? userTurns.findIndex((turn) => turn.throughEntryId === sessionPair.rangeEnd?.[session.id])
+    : -1;
+  const turnsByUserId = useMemo(() => new Map(userTurns.map((turn) => [turn.userEntryId, turn])), [userTurns]);
+  const placePairDraft = useCallback(async (
+    pair: SessionPair,
+    sourceId: string,
+    mode: "manual" | "auto",
+    packId?: string,
+  ) => {
+    if (!storageScope || !otherSeat(pair, sourceId)) return;
+    const title = sourceId === session?.id
+      ? (session.name || session.firstMessage.slice(0, 40) || sourceId.slice(0, 8))
+      : sourceId.slice(0, 8);
+    try {
+      const packed = await buildPairDraft(sourceId, pair, title, packId);
+      if (!packed) return;
+      const current = readPair(storageScope, window.localStorage) ?? pair;
+      if (mode === "auto" && (current.rangeStart?.[sourceId] || current.rangeEnd?.[sourceId])) return;
+      if (current.sentThrough?.[sourceId] && packed.throughEntryId === current.sentThrough[sourceId]) return;
+      if (
+        current.pending?.sourceId === sourceId
+        && current.pending.throughEntryId === packed.throughEntryId
+        && current.pending.text === packed.text
+      ) return;
+      const existing = getDraft(packed.targetId)?.value ?? "";
+      const previous = current.pending?.sourceId === sourceId ? current.pending.text : undefined;
+      const value = mergePairDraft(existing, packed.text, mode, previous);
+      if (value === null) return;
+      setDraft(packed.targetId, {
+        value,
+        images: getDraft(packed.targetId)?.images ?? [],
+      });
+      const next: SessionPair = {
+        ...current,
+        pending: {
+          packId: packed.packId,
+          sourceId,
+          targetId: packed.targetId,
+          throughEntryId: packed.throughEntryId,
+          text: packed.text,
+        },
+      };
+      writePair(storageScope, next, window.localStorage);
+      notifyPairChange();
+      setSessionPair(next);
+      if (mode === "manual") setPairHint(null);
+    } catch (error) {
+      if (mode === "auto") return;
+      const message = error instanceof Error ? error.message : String(error);
+      setPairHint(message === PAIR_RANGE_SHORT ? t("pair.rangeShort") : message);
+    }
+  }, [session, storageScope, t]);
+  const pairMarkRef = useRef<string | undefined>(undefined);
+  const togglePairMark = useCallback((turn: UserTurn) => {
+    if (!sessionPair || !session?.id || !storageScope) return;
+    const id = session.id;
+    const picked = nextPairSelection(
+      userTurns,
+      sessionPair.rangeStart?.[id],
+      sessionPair.rangeEnd?.[id],
+      pairMarkRef.current,
+      turn,
+    );
+    pairMarkRef.current = picked.lastClickedUserId;
+    const next: SessionPair = {
+      ...sessionPair,
+      rangeStart: { ...sessionPair.rangeStart, [id]: picked.startUserId },
+      rangeEnd: { ...sessionPair.rangeEnd, [id]: picked.endThroughId },
+    };
+    writePair(storageScope, next, window.localStorage);
+    notifyPairChange();
+    setSessionPair(next);
+    if (picked.startUserId && picked.endThroughId) {
+      if (!otherSeat(next, id)) setPairHint(t("pair.needOther"));
+      else {
+        setPairHint(null);
+        void placePairDraft(next, id, "manual");
+      }
+    } else {
+      setPairHint(null);
+      const pending = next.pending;
+      if (pending?.sourceId === id) {
+        const existing = getDraft(pending.targetId)?.value ?? "";
+        setDraft(pending.targetId, {
+          value: stripUnsentPack(existing, pending.text),
+          images: getDraft(pending.targetId)?.images ?? [],
+        });
+        const cleared: SessionPair = { ...next, pending: null };
+        writePair(storageScope, cleared, window.localStorage);
+        notifyPairChange();
+        setSessionPair(cleared);
+      }
+    }
+  }, [placePairDraft, session?.id, sessionPair, storageScope, t, userTurns]);
+  useEffect(() => {
+    if (!session?.id || !sessionPair || !storageScope || sessionBusy) return;
+    const sourceId = session.id;
+    if (!seatOf(sessionPair, sourceId) || !sessionPair.sentThrough?.[sourceId]) return;
+    if (sessionPair.rangeStart?.[sourceId] || sessionPair.rangeEnd?.[sourceId]) return;
+    if (!otherSeat(sessionPair, sourceId)) return;
+    const tail = entryIds[entryIds.length - 1];
+    if (!tail || tail === sessionPair.sentThrough[sourceId] || tail === sessionPair.pending?.throughEntryId) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      const reuse = sessionPair.pending?.sourceId === sourceId ? sessionPair.pending.packId : undefined;
+      void placePairDraft(sessionPair, sourceId, "auto", reuse);
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [entryIds.length, placePairDraft, session?.id, sessionBusy, sessionPair, storageScope]);
   const contextPercent = typeof contextUsage?.percent === "number" && Number.isFinite(contextUsage.percent)
     ? (contextUsage.percent <= 1 ? contextUsage.percent * 100 : contextUsage.percent)
     : null;
@@ -691,6 +822,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   }, [visibleCount, scrollContainerRef]);
   // Push session stats up to AppShell for the top bar.
   // Compare scalar fields to avoid loops from new object identity each render.
+  const lastTurn = latestAssistantUsage(messages);
   const statsKey = sessionStats
     ? [
       sessionStats.sessionId,
@@ -708,12 +840,19 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       sessionStats.tokens.total,
       sessionStats.cost ?? 0,
       sessionStats.totalActiveMs ?? 0,
+      lastTurn?.input ?? "",
+      lastTurn?.output ?? "",
+      lastTurn?.cacheRead ?? "",
+      lastTurn?.cacheWrite ?? "",
     ].join("|")
     : null;
   const sessionStatsRef = useRef(sessionStats);
   sessionStatsRef.current = sessionStats;
+  const lastTurnRef = useRef(lastTurn);
+  lastTurnRef.current = lastTurn;
   useEffect(() => {
-    onSessionStatsChange?.(sessionStatsRef.current);
+    const current = sessionStatsRef.current;
+    onSessionStatsChange?.(current ? { ...current, lastTurn: lastTurnRef.current } : null);
   }, [statsKey, onSessionStatsChange]);
   useEffect(() => () => { onSessionStatsChange?.(null); }, [onSessionStatsChange]);
 
@@ -1144,6 +1283,31 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
               };
 
               const rendered: ReactNode[] = [];
+              const pairRange = (turn: UserTurn | undefined) => {
+                if (!turn) return false;
+                const turnIndex = userTurns.findIndex((item) => item.userEntryId === turn.userEntryId);
+                if (turnIndex < 0) return false;
+                if (pairStartIndex >= 0 && pairEndIndex >= 0) {
+                  const rangeLow = Math.min(pairStartIndex, pairEndIndex);
+                  const rangeHigh = Math.max(pairStartIndex, pairEndIndex);
+                  return turnIndex >= rangeLow && turnIndex <= rangeHigh;
+                }
+                return turnIndex === (pairStartIndex >= 0 ? pairStartIndex : pairEndIndex);
+              };
+              const pushTurn = (userIdx: number, nodes: ReactNode[]) => {
+                const turn = userIdx >= 0 && messages[userIdx]?.role === "user"
+                  ? turnsByUserId.get(String(entryIds[userIdx] || ""))
+                  : undefined;
+                if (!turn || !pairSeat || !pairRange(turn)) {
+                  for (const node of nodes) rendered.push(node);
+                  return;
+                }
+                rendered.push(
+                  <div key={`pair-${turn.userEntryId}`} style={{ background: "rgba(37,99,235,0.16)", borderRadius: 8 }}>
+                    {nodes}
+                  </div>,
+                );
+              };
               for (let idx = 0; idx < messages.length;) {
                 const msg = messages[idx];
                 const hasAnchor = isMessageGroupAnchor(msg);
@@ -1164,23 +1328,24 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                 const finalAssistantIdx = findFinalAssistantIndex(messages, userIdx, endIdx);
 
                 if (finalAssistantIdx === -1) {
-                  for (let renderIdx = groupStartIdx; renderIdx < endIdx; renderIdx++) {
-                    rendered.push(renderMessage(renderIdx));
-                  }
+                  const nodes: ReactNode[] = [];
+                  for (let renderIdx = groupStartIdx; renderIdx < endIdx; renderIdx++) nodes.push(renderMessage(renderIdx));
+                  pushTurn(userIdx, nodes);
                   idx = endIdx;
                   continue;
                 }
 
                 const isLiveTail = (sessionBusy || streamState.isStreaming) && endIdx === messages.length && userIdx === lastAnchorIdx;
                 if (isLiveTail) {
-                  for (let renderIdx = groupStartIdx; renderIdx < endIdx; renderIdx++) {
-                    rendered.push(renderMessage(renderIdx));
-                  }
+                  const nodes: ReactNode[] = [];
+                  for (let renderIdx = groupStartIdx; renderIdx < endIdx; renderIdx++) nodes.push(renderMessage(renderIdx));
+                  pushTurn(userIdx, nodes);
                   idx = endIdx;
                   continue;
                 }
 
-                if (hasAnchor) rendered.push(renderMessage(userIdx));
+                const turnNodes: ReactNode[] = [];
+                if (hasAnchor) turnNodes.push(renderMessage(userIdx));
 
                 const finalAssistant = messages[finalAssistantIdx] as AssistantMessage;
                 const finalSplit = splitFinalAssistantBlocks(finalAssistant);
@@ -1221,11 +1386,15 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                   }));
                 }
 
+                const pairTurn = hasAnchor && messages[userIdx]?.role === "user"
+                  ? turnsByUserId.get(String(entryIds[userIdx] || ""))
+                  : undefined;
                 if (processViews.length > 0) {
-                  rendered.push(
+                  turnNodes.push(
                     <div
                       key={`process-group-${entryIds[groupStartIdx] ?? groupStartIdx}`}
                       ref={processRefIdx === undefined ? undefined : (el) => { messageRefs.current[processRefIdx] = el; }}
+                      style={pairTurn && pairRange(pairTurn) ? { background: "var(--bg)", borderRadius: 8 } : undefined}
                     >
                       {/* Re-key on answer availability: useState reads defaultExpanded only
                           on mount, so a turn first rendered without an answer (expanded)
@@ -1252,15 +1421,16 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                     }
                   }
                   const writtenFiles = extractTurnWrittenFiles(turnContent, toolResultsMap, messageCwd);
-                  rendered.push(renderMessage(finalAssistantIdx, {
+                  turnNodes.push(renderMessage(finalAssistantIdx, {
                     messageOverride: finalAnswerMessage,
                     writtenFiles,
                     recoverTruncation: endIdx === messages.length && !streamState.isStreaming && !hasAssistantAnswer(finalAnswerMessage),
                   }));
                 }
                 for (let renderIdx = finalAssistantIdx + 1; renderIdx < endIdx; renderIdx++) {
-                  rendered.push(renderMessage(renderIdx));
+                  turnNodes.push(renderMessage(renderIdx));
                 }
+                pushTurn(userIdx, turnNodes);
                 idx = endIdx;
               }
               const { startIndex } = getVisibleRenderWindow(rendered.length, visibleCount);
@@ -1340,7 +1510,17 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
             streamingMessage={streamState.streamingMessage}
             scrollContainer={scrollContainerRef}
             messageRefs={messageRefs}
+            entryIds={entryIds}
             onRevealHistory={revealHistoryForMinimap}
+            rangeStart={session?.id ? sessionPair?.rangeStart?.[session.id] : undefined}
+            rangeEnd={session?.id && sessionPair?.rangeEnd?.[session.id]
+              ? userTurns.find((turn) => turn.throughEntryId === sessionPair.rangeEnd?.[session.id])?.userEntryId
+              : undefined}
+            pairHint={pairHint}
+            onSelectTurn={pairSeat ? (userEntryId) => {
+              const turn = turnsByUserId.get(userEntryId);
+              if (turn) togglePairMark(turn);
+            } : undefined}
           />
         )}
         </>}

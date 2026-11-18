@@ -19,7 +19,15 @@ test("folder expand does not watch every open directory", () => {
 test("a tool end reloads only the selected directory", () => {
   assert.match(explorer, /if \(!directoryTouchToken \|\| !open \|\| !loaded \|\| pendingLinkTarget\) return/);
   assert.match(explorer, /if \(here !== selected\) return/);
+  assert.match(explorer, /if \(!isUnderCodeZone\(here\)\) return/);
+  assert.match(explorer, /Tool-end does not re-list DatePool/);
   assert.match(explorer, /selectedTouchKey/);
   assert.match(shell, /onFilesystemMaybeChanged=\{handleExplorerTouchSelected\}/);
   assert.doesNotMatch(shell, /onFilesystemMaybeChanged=\{handleExplorerRefresh\}/);
+});
+
+test("truncated folders expose a local filter instead of expanding the image sea", () => {
+  assert.match(explorer, /files\.folderFilter/);
+  assert.match(explorer, /truncatedHint/);
+  assert.match(route, /isPoolHeavyDir\(filePath\) && dirents\.length > 80/);
 });

@@ -12,7 +12,7 @@ import { resolveVisibleModels, selectInitialModelScope } from "@/lib/model-scope
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { projectTrustReloadOptions } from "@/lib/project-trust";
 import { rememberProviderModels, withDeferredProviderModels } from "@/lib/deferred-provider-models";
-import { enabledModelsForAdmin } from "@/lib/admin-enabled-models";
+import { enabledModelsForAdmin, readAdminCredentialProviders, withStoredProviderCatalog } from "@/lib/admin-enabled-models";
 import { createAdminModelRuntime } from "@/lib/model-runtime";
 import { resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 
@@ -49,11 +49,15 @@ async function loadModels(cwd: string, admin: string): Promise<ModelsData> {
   });
   const modelError = services.modelRuntime.getError();
   const settings: SettingsManager = services.settingsManager;
-  await rememberProviderModels(services.modelRuntime);
+  const modelRuntime = withStoredProviderCatalog(
+    withDeferredProviderModels(services.modelRuntime),
+    readAdminCredentialProviders(admin),
+  );
+  await rememberProviderModels(modelRuntime);
   // `enabledModels` supports globs and fuzzy patterns, so resolve it the same
   // way the CLI does instead of comparing pattern strings literally (#307).
   const scope = await resolveVisibleModels(
-    withDeferredProviderModels(services.modelRuntime),
+    modelRuntime,
     enabledModelsForAdmin(settings, admin),
   );
   const { visible, thinkingLevelPins, warnings } = scope;

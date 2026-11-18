@@ -5,19 +5,22 @@
 
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { isAbsolute, join, resolve, sep } from "node:path";
+import { isBlockedAdminLeaf } from "./admin-leaf";
 import {
   adminCodeZone,
   codeZonesRoot,
   extraMountsFor,
   isForeignAdminCodePath,
   legacyCodeHomesRoot,
+  loadAdminExtraMounts,
 } from "./admin-workspaces";
 import { isForeignTermWorkspace, rewriteVirtualCodeText } from "./dual-roots";
 import { sanitizeWebAdmin, warehouseRoot } from "./web-admin-scope";
 
 const HYF_ROOT = "/home/aoi/hyf";
 const FOREIGN = "路径属于其他登录名的代码区，这次不能读也不能写。";
-const HYF_WRITE = "这个 /home/aoi/hyf 目录没有登记给当前登录名，不能写入。私有文件放 code/home；flyingu 的本地仓库是 promptDet。";
+const HYF_WRITE = "这个 /home/aoi/hyf 目录没有登记给当前登录名，不能写入。私有文件放 code/home。";
+const PRIVATE = "这个路径属于会话或密钥目录，只能访问当前登录名自己的那一份。";
 
 export type AdminPathAction = "read" | "write";
 
@@ -58,6 +61,31 @@ function unregisteredHyfWrite(target: string, admin: string, env: NodeJS.Process
   return !extraMountsFor(name, env).some((mount) => underTree(target, mount.path));
 }
 
+function sessionsRoot(env: NodeJS.ProcessEnv): string {
+  const explicit = String(env.PI_WEB_SESSIONS_ROOT || "").trim();
+  if (explicit) return resolve(explicit);
+  const warehouse = warehouseOf(env);
+  return warehouse ? resolve(warehouse, ".agent", "sessions") : "/home/aoi/session-private";
+}
+
+function baseName(target: string): string {
+  const slash = target.lastIndexOf("/");
+  return slash >= 0 ? target.slice(slash + 1) : target;
+}
+
+/** Session files stay in the current leaf. Machine secrets are not readable. */
+function privatePathBlock(target: string, admin: string, env: NodeJS.ProcessEnv): string | null {
+  const abs = resolve(target);
+  const base = baseName(abs);
+  if (base === "provider-runtime-secrets.json" || base === ".ticket-secret") return PRIVATE;
+  const root = sessionsRoot(env);
+  if (!root || !underTree(abs, root)) return null;
+  if (!admin || isBlockedAdminLeaf(admin)) return PRIVATE;
+  const mine = resolve(join(root, admin));
+  if (underTree(abs, mine)) return null;
+  return PRIVATE;
+}
+
 export function adminPathBlockReason(
   target: string,
   admin: string,
@@ -69,6 +97,8 @@ export function adminPathBlockReason(
   const name = sanitizeWebAdmin(admin);
   const abs = isAbsolute(raw) ? lexicalAdminCodePath(raw, name, env) : raw;
   if (isAbsolute(raw)) {
+    const blocked = privatePathBlock(abs, name, env);
+    if (blocked) return blocked;
     if (isForeignAdminCodePath(abs, name, env) || isForeignTermWorkspace(abs, name)) return FOREIGN;
     if (action === "write" && unregisteredHyfWrite(abs, name, env)) return HYF_WRITE;
   }
@@ -91,9 +121,12 @@ function scanPrefix(text: string, prefix: string): string[] {
 }
 
 export function sensitiveCommandPaths(command: string, env: NodeJS.ProcessEnv = process.env): string[] {
-  const prefixes = [HYF_ROOT, codeZonesRoot(env), legacyCodeHomesRoot(env)];
+  const prefixes = [HYF_ROOT, sessionsRoot(env), codeZonesRoot(env), legacyCodeHomesRoot(env)];
   const warehouse = warehouseOf(env);
   if (warehouse) prefixes.push(join(warehouse, "code"));
+  for (const mounts of Object.values(loadAdminExtraMounts(env))) {
+    for (const mount of mounts) prefixes.push(mount.path);
+  }
   const seen = new Set<string>();
   const out: string[] = [];
   for (const prefix of prefixes) {
@@ -136,8 +169,11 @@ export function bashCommandBlockReason(
 ): string | null {
   const name = sanitizeWebAdmin(admin);
   const rewritten = rewriteVirtualCodeText(command, name);
+  if (rewritten.includes("provider-runtime-secrets.json")) return PRIVATE;
   for (const raw of sensitiveCommandPaths(rewritten, env)) {
     const abs = lexicalAdminCodePath(raw, name, env);
+    const blocked = privatePathBlock(resolve(raw), name, env) || privatePathBlock(abs, name, env);
+    if (blocked) return blocked;
     if (isForeignAdminCodePath(abs, name, env) || isForeignTermWorkspace(abs, name)) return FOREIGN;
     if (isWriteDestination(rewritten, raw) && unregisteredHyfWrite(resolve(raw), name, env)) return HYF_WRITE;
   }

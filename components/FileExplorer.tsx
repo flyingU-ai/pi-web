@@ -8,6 +8,7 @@ import {
   getFileDirectory,
   getFileName,
   getRelativeFilePath,
+  isUnderCodeZone,
   joinFilePath,
   normalizeFilePathSlashes,
   uploadDirFromSelection,
@@ -17,6 +18,7 @@ import { adminFetchInit } from "@/lib/web-admin-client";
 import type { FileIndexEntry } from "@/lib/file-fuzzy";
 import { uploadFiles, type UploadConflictStrategy, type UploadError, type UploadResponse } from "@/lib/file-upload-client";
 import { buildSearchTree, type SearchTreeNode } from "@/lib/search-tree";
+import { dataZoneVisualGroup, type DataZoneBand } from "@/lib/data-zone-bands";
 import { useI18n } from "@/hooks/useI18n";
 type Translate = ReturnType<typeof useI18n>["t"];
 
@@ -30,6 +32,7 @@ interface FileEntry {
   outsideLinkTarget?: string;
   /** That target contains the project or the home folder. */
   outsideLinkEncloses?: boolean;
+  dataBand?: DataZoneBand;
 }
 
 interface FileNode {
@@ -42,6 +45,7 @@ interface FileNode {
   loaded?: boolean;
   outsideLinkTarget?: string;
   outsideLinkEncloses?: boolean;
+  dataBand?: DataZoneBand;
 }
 
 interface Props {
@@ -92,29 +96,44 @@ async function responseError(res: Response, fallback: string): Promise<Error> {
 
 type CodeMountHint = { ok: boolean; reason?: string };
 
-async function fetchList(dirPath: string): Promise<{ nodes: FileNode[]; codeMount?: CodeMountHint }> {
+async function fetchList(dirPath: string, query = ""): Promise<{ nodes: FileNode[]; codeMount?: CodeMountHint; truncated?: boolean; hidden?: number; total?: number }> {
   const encoded = encodeFilePathForApi(dirPath);
-  const res = await fetch(`/api/files/${encoded}?type=list`);
+  const q = query.trim();
+  const res = await fetch(`/api/files/${encoded}?type=list${q ? `&q=${encodeURIComponent(q)}` : ""}`);
   if (!res.ok) throw await responseError(res, "Failed to load files");
-  const data = await res.json() as { entries?: FileEntry[]; codeMount?: CodeMountHint };
+  const data = await res.json() as {
+    entries?: FileEntry[];
+    codeMount?: CodeMountHint;
+    truncated?: boolean;
+    hidden?: number;
+    total?: number;
+  };
+  const parentIsCode = /(^|\/)code$/.test(normalizeFilePathSlashes(dirPath).replace(/\/+$/, ""));
   return {
-    nodes: (data.entries ?? []).map((e) => ({
-      name: e.name,
-      fullPath: joinFilePath(dirPath, e.name),
-      isDir: e.isDir,
-      size: e.size,
-      gitIgnored: e.gitIgnored,
-      children: e.isDir ? [] : undefined,
-      loaded: !e.isDir,
-      outsideLinkTarget: e.outsideLinkTarget,
-      outsideLinkEncloses: e.outsideLinkEncloses,
-    })),
+    nodes: (data.entries ?? []).map((e) => {
+      const isDir = Boolean(e.isDir) || (parentIsCode && e.name === "home");
+      return {
+        name: e.name,
+        fullPath: joinFilePath(dirPath, e.name),
+        isDir,
+        size: e.size,
+        gitIgnored: e.gitIgnored,
+        children: isDir ? [] : undefined,
+        loaded: !isDir,
+        outsideLinkTarget: e.outsideLinkTarget,
+        outsideLinkEncloses: e.outsideLinkEncloses,
+        dataBand: e.dataBand,
+      };
+    }),
     codeMount: data.codeMount,
+    truncated: data.truncated,
+    hidden: data.hidden,
+    total: data.total,
   };
 }
 
-async function fetchEntries(dirPath: string): Promise<FileNode[]> {
-  return (await fetchList(dirPath)).nodes;
+async function fetchEntries(dirPath: string, query = ""): Promise<FileNode[]> {
+  return (await fetchList(dirPath, query)).nodes;
 }
 
 // Sends the target the operator was shown, so a link pointed elsewhere since
@@ -233,6 +252,7 @@ export function TreeNode({
   onSelectDir,
   inCodeZone = false,
   onCodeMenu,
+  accent,
   t,
 }: {
   node: FileNode;
@@ -252,6 +272,7 @@ export function TreeNode({
   onSelectDir: (dir: string) => void;
   inCodeZone?: boolean;
   onCodeMenu?: (node: FileNode, event: React.MouseEvent) => void;
+  accent?: "incoming" | "benchmark";
   t: Translate;
 }) {
   const open = expandedPaths.has(node.fullPath);
@@ -269,6 +290,8 @@ export function TreeNode({
   const [allowedLinkTarget, setAllowedLinkTarget] = useState<string | null>(null);
   const [allowingLink, setAllowingLink] = useState(false);
   const [allowLinkError, setAllowLinkError] = useState<string | null>(null);
+  const [folderQuery, setFolderQuery] = useState("");
+  const [truncatedHint, setTruncatedHint] = useState<{ hidden: number; total: number } | null>(null);
   // A link leading outside the project is refused until the operator allows
   // its target, so it asks for that instead of listing (#748).
   const pendingLinkTarget = node.outsideLinkTarget && node.outsideLinkTarget !== allowedLinkTarget
@@ -282,20 +305,25 @@ export function TreeNode({
     setAllowLinkError(null);
   }, [node.outsideLinkTarget]);
 
-  const loadChildren = useCallback(async (force = false) => {
+  const loadChildren = useCallback(async (force = false, query = folderQuery) => {
     if (loaded && !force) return;
     setLoading(true);
     setLoadError(null);
     try {
-      const entries = await fetchEntries(node.fullPath);
-      setChildren(entries);
+      const listed = await fetchList(node.fullPath, query);
+      setChildren(listed.nodes);
+      setTruncatedHint(
+        listed.truncated && listed.hidden
+          ? { hidden: listed.hidden, total: listed.total ?? 0 }
+          : null,
+      );
       setLoaded(true);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
     }
-  }, [loaded, node.fullPath]);
+  }, [folderQuery, loaded, node.fullPath]);
 
   // Manual refresh (the toolbar button, upload, rename). Not tool-end.
   useEffect(() => {
@@ -305,12 +333,13 @@ export function TreeNode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken]);
 
-  // A bash/write/edit only reloads the directory the operator has selected.
+  // A bash/write/edit only reloads the selected code directory. DATA never follows.
   useEffect(() => {
     if (!directoryTouchToken || !open || !loaded || pendingLinkTarget) return;
     const here = normalizeFilePathSlashes(node.fullPath).replace(/\/+$/, "");
     const selected = normalizeFilePathSlashes(selectedDir).replace(/\/+$/, "");
     if (here !== selected) return;
+    if (!isUnderCodeZone(here)) return;
     loadChildren(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [directoryTouchToken]);
@@ -318,7 +347,8 @@ export function TreeNode({
   const selected = selectedDir === node.fullPath;
 
   const handleClick = useCallback(() => {
-    if (node.isDir) {
+    const treatAsDir = node.isDir || node.name === "home";
+    if (treatAsDir) {
       onSelectDir(node.fullPath);
       const next = !open;
       onToggleExpanded(node.fullPath, next);
@@ -377,6 +407,11 @@ export function TreeNode({
             : hovered ? "var(--bg-hover)" : "transparent",
           borderRadius: 4,
           userSelect: "none",
+          boxShadow: accent === "benchmark"
+            ? "inset 3px 0 0 #16a34a"
+            : accent === "incoming"
+              ? "inset 3px 0 0 #d97706"
+              : undefined,
         }}
       >
         {node.isDir && (
@@ -591,6 +626,43 @@ export function TreeNode({
       )}
       {node.isDir && open && !pendingLinkTarget && (
         <div>
+          {(truncatedHint || folderQuery) && (
+            <div
+              style={{
+                paddingLeft: 8 + (depth + 1) * 14,
+                paddingRight: 8,
+                paddingTop: 4,
+                paddingBottom: 4,
+              }}
+            >
+              {truncatedHint ? (
+                <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 4 }}>
+                  {t("files.listTruncated", { hidden: truncatedHint.hidden, total: truncatedHint.total })}
+                </div>
+              ) : null}
+              <input
+                value={folderQuery}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setFolderQuery(next);
+                  void loadChildren(true, next);
+                }}
+                onClick={(event) => event.stopPropagation()}
+                placeholder={t("files.folderFilter")}
+                aria-label={t("files.folderFilter")}
+                style={{
+                  width: "100%",
+                  height: 22,
+                  padding: "0 8px",
+                  border: "1px solid var(--border)",
+                  borderRadius: 4,
+                  background: "var(--bg-panel)",
+                  color: "var(--text)",
+                  fontSize: 11,
+                }}
+              />
+            </div>
+          )}
           {children.map((child) => (
             <TreeNode
               key={child.fullPath}
@@ -770,6 +842,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [codeMountHint, setCodeMountHint] = useState<CodeMountHint | null>(null);
+  const [rootListTruncated, setRootListTruncated] = useState<{ hidden: number; total: number } | null>(null);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [selectedDir, setSelectedDir] = useState(cwd);
   const [codeChildren, setCodeChildren] = useState<FileNode[]>([]);
@@ -907,10 +980,13 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     () => roots.find((node) => node.name === "code" && node.isDir) ?? null,
     [roots],
   );
-  const dataRoots = useMemo(
-    () => (codeNode ? roots.filter((node) => node !== codeNode) : roots),
-    [roots, codeNode],
-  );
+  const dataRoots = useMemo(() => {
+    const nodes = codeNode ? roots.filter((node) => node !== codeNode) : roots;
+    if (!nodes.some((node) => node.dataBand)) return nodes;
+    const order: Record<DataZoneBand, number> = { incoming: 0, infra: 1, train: 2, benchmark: 3 };
+    return [...nodes].sort((a, b) =>
+      order[a.dataBand ?? "train"] - order[b.dataBand ?? "train"] || a.name.localeCompare(b.name));
+  }, [roots, codeNode]);
   const codeRootPath = codeNode?.fullPath ?? "";
   const codeHomePath = codeRootPath ? joinFilePath(codeRootPath, "home") : "";
   useEffect(() => {
@@ -1138,28 +1214,18 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
         if (cancelled) return;
         setRoots(listed.nodes);
         setCodeMountHint(listed.codeMount ?? null);
+        setRootListTruncated(
+          listed.truncated && listed.hidden
+            ? { hidden: listed.hidden, total: listed.total ?? 0 }
+            : null,
+        );
       })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [cwd, refreshKey, treeRefreshKey]);
 
-  // Tool-end while the warehouse root itself is selected: one list, not the open tree.
-  useEffect(() => {
-    if (!directoryTouchToken) return;
-    const root = normalizeFilePathSlashes(cwd).replace(/\/+$/, "");
-    const selected = normalizeFilePathSlashes(selectedDir).replace(/\/+$/, "");
-    if (selected !== root) return;
-    let cancelled = false;
-    fetchList(cwd)
-      .then((listed) => {
-        if (cancelled) return;
-        setRoots(listed.nodes);
-        setCodeMountHint(listed.codeMount ?? null);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [directoryTouchToken, cwd, selectedDir]);
+  // Tool-end does not re-list DatePool / DATA. Manual refresh still uses refreshKey.
 
   useEffect(() => {
     let cancelled = false;
@@ -1489,6 +1555,11 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
             <div style={{ padding: "8px 12px", fontSize: 11, color: "#f87171" }}>{error}</div>
           ) : (
             <>
+              {rootListTruncated ? (
+                <div style={{ padding: "6px 10px", marginBottom: 6, fontSize: 11, color: "var(--text-dim)", border: "1px solid var(--border)", borderRadius: 6 }}>
+                  {t("files.listTruncated", { hidden: rootListTruncated.hidden, total: rootListTruncated.total })}
+                </div>
+              ) : null}
               {codeMountHint && !codeMountHint.ok ? (
                 <div style={{ padding: "8px 10px", marginBottom: 6, fontSize: 11, color: "#b45309", border: "1px solid color-mix(in srgb, #f59e0b 35%, var(--border))", borderRadius: 6 }}>
                   {codeMountHint.reason === "blocked_by_real_code_dir"
@@ -1594,26 +1665,40 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
                   <div style={{ padding: "2px 10px 4px", fontSize: 10, color: "#b45309" }}>
                     {t("files.dataZoneHint")}
                   </div>
-                  {dataRoots.map((node) => (
-                    <TreeNode
-                      key={node.fullPath}
-                      node={node}
-                      depth={0}
-                      cwd={cwd}
-                      onOpenFile={onOpenFile}
-                      onAtMention={onAtMention}
-                      expandedPaths={expandedPaths}
-                      onToggleExpanded={handleToggleExpanded}
-                      refreshToken={refreshToken}
-                      directoryTouchToken={directoryTouchToken}
-                      highlightedPaths={highlightedPaths}
-                      gitStatusByPath={gitStatusByPath}
-                      changedDirectoryPaths={changedDirectoryPaths}
-                      selectedDir={selectedDir}
-                      onSelectDir={setSelectedDir}
-                      t={t}
-                    />
-                  ))}
+                  {dataRoots.map((node, index) => {
+                    const group = node.dataBand ? dataZoneVisualGroup(node.dataBand) : "";
+                    const previous = index > 0 && dataRoots[index - 1].dataBand
+                      ? dataZoneVisualGroup(dataRoots[index - 1].dataBand!)
+                      : "";
+                    const accent = node.dataBand === "benchmark"
+                      ? "benchmark"
+                      : node.dataBand === "incoming"
+                        ? "incoming"
+                        : undefined;
+                    return (
+                      <div key={node.fullPath}>
+                        {group && previous && group !== previous ? <div style={{ height: 8 }} /> : null}
+                        <TreeNode
+                          node={node}
+                          depth={0}
+                          cwd={cwd}
+                          onOpenFile={onOpenFile}
+                          onAtMention={onAtMention}
+                          expandedPaths={expandedPaths}
+                          onToggleExpanded={handleToggleExpanded}
+                          refreshToken={refreshToken}
+                          directoryTouchToken={directoryTouchToken}
+                          highlightedPaths={highlightedPaths}
+                          gitStatusByPath={gitStatusByPath}
+                          changedDirectoryPaths={changedDirectoryPaths}
+                          selectedDir={selectedDir}
+                          onSelectDir={setSelectedDir}
+                          accent={accent}
+                          t={t}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               ) : null}
             </>

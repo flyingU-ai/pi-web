@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, typ
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
+import { AdminUsageCard } from "./AdminUsageCard";
 import { ChatWindow } from "./ChatWindow";
 import type { ChatScrollPosition } from "@/lib/chat-scroll-position";
 import { FileViewer } from "./FileViewer";
@@ -38,6 +39,7 @@ import { getInitialNavigation, withTabOpen } from "@/lib/initial-navigation";
 import { clearTabOpenSession, getTabOpen, setTabOpenNewSession, setTabOpenSession } from "@/lib/tab-session";
 import { mergeCatalogRow } from "./session-catalog-helpers";
 import { rekeyDraft } from "@/lib/draft-store";
+import { cacheHitPercent, formatCacheHitPercent, sessionReportsCache } from "@/lib/session-stats";
 import {
   clearLastOpen,
   getLastOpenSession,
@@ -88,6 +90,16 @@ const AGENT_PANEL_WIDTH = 420;
 
 function parkedNewSessionDraftKey(cwd: string): string {
   return `parked-new:${cwd}`;
+}
+
+function HitTargetIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
+      <circle cx="6" cy="6" r="5" />
+      <circle cx="6" cy="6" r="2.6" />
+      <circle cx="6" cy="6" r="0.8" fill="currentColor" stroke="none" />
+    </svg>
+  );
 }
 
 export function AppShell() {
@@ -193,6 +205,11 @@ export function AppShell() {
   const [explorerTouchKey, setExplorerTouchKey] = useState(0);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
+  useEffect(() => {
+    const refresh = () => setModelsRefreshKey((key) => key + 1);
+    window.addEventListener("pi-web-models-refresh", refresh);
+    return () => window.removeEventListener("pi-web-models-refresh", refresh);
+  }, []);
   const [projectTrust, setProjectTrust] = useState<ProjectTrustStatus | null>(null);
   const [projectTrustDialogOpen, setProjectTrustDialogOpen] = useState(false);
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
@@ -1292,6 +1309,7 @@ export function AppShell() {
         onSessionsChange={handleSessionsChange}
         storageScope={scopedWorkspaceKey(selectedSession?.projectKey || selectedSession?.cwd || newSessionCwd || "", adminName)}
       />
+      <AdminUsageCard />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
           ["models", translate("common.models")],
@@ -1694,13 +1712,11 @@ export function AppShell() {
     if (!mobile && (!showChat || (!sessionStats && !contextUsage))) return null;
 
     const tokens = sessionStats?.tokens;
-    const cost = sessionStats?.cost ?? 0;
     const formatCompact = (value: number) => value >= 1_000_000
       ? `${(value / 1_000_000).toFixed(1)}M`
       : value >= 1000
         ? `${(value / 1000).toFixed(0)}k`
         : String(value);
-    const costText = cost > 0 ? (cost >= 0.01 ? `$${cost.toFixed(2)}` : `<$0.01`) : null;
 
     let contextColor = "var(--text-muted)";
     let desktopContextText: string | null = null;
@@ -1715,13 +1731,23 @@ export function AppShell() {
       mobileContextText = percent !== null ? `${percent.toFixed(0)}%` : null;
     }
 
+    const reported = Boolean(tokens && sessionReportsCache(tokens));
+    const unreported = translate("session.cacheUnreported");
+    const averageText = reported && tokens
+      ? formatCacheHitPercent(cacheHitPercent(tokens), unreported)
+      : unreported;
+    const showHit = Boolean(tokens && (reported || tokens.input > 0 || tokens.output > 0));
     const tooltipParts: string[] = [];
     if (tokens) {
-      tooltipParts.push(`in: ${tokens.input.toLocaleString(locale)}`);
       tooltipParts.push(`out: ${tokens.output.toLocaleString(locale)}`);
-      tooltipParts.push(`cache read: ${tokens.cacheRead.toLocaleString(locale)}`);
-      tooltipParts.push(`cache write: ${tokens.cacheWrite.toLocaleString(locale)}`);
-      if (cost > 0) tooltipParts.push(`cost: $${cost.toFixed(4)}`);
+      tooltipParts.push(translate("session.hitTooltip", {
+        input: tokens.input.toLocaleString(locale),
+        cacheRead: tokens.cacheRead.toLocaleString(locale),
+        cacheWrite: tokens.cacheWrite.toLocaleString(locale),
+        price: "",
+      }));
+      if (reported) tooltipParts.push(`${translate("session.cacheHitRate")} ${averageText}`);
+      else if (showHit) tooltipParts.push(translate("session.cacheUnreportedHint"));
     }
     if (contextUsage?.contextWindow) {
       const percent = contextUsage.percent;
@@ -1731,7 +1757,7 @@ export function AppShell() {
     const covered = mobile && isNarrowMobile && mobileToolbarMoreOpen;
     const hasMobileValues = Boolean(
       (tokens && (tokens.input > 0 || tokens.output > 0))
-      || costText
+      || showHit
       || mobileContextText,
     );
 
@@ -1792,9 +1818,10 @@ export function AppShell() {
                 {formatCompact(tokens.output)}
               </span>
             )}
-            {costText && (
-              <span className="mobile-session-stat-cost" style={{ color: "var(--text)", fontWeight: 500, flexShrink: 0 }}>
-                {costText}
+            {showHit && (
+              <span className="mobile-session-stat-cost" title={reported ? translate("session.cacheHitRate") : translate("session.cacheUnreportedHint")} style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--text)", fontWeight: 500, flexShrink: 0 }}>
+                <HitTargetIcon />
+                {reported ? averageText : unreported}
               </span>
             )}
             {mobileContextText && (
@@ -1834,9 +1861,10 @@ export function AppShell() {
                 {formatCompact(tokens.cacheRead)}
               </span>
             )}
-            {costText && (
-              <span style={{ display: "flex", alignItems: "center", color: "var(--text)", fontWeight: 500 }}>
-                {costText}
+            {showHit && (
+              <span title={reported ? translate("session.cacheHitRate") : translate("session.cacheUnreportedHint")} style={{ display: "flex", alignItems: "center", gap: 4, color: "var(--text)", fontWeight: 500 }}>
+                <HitTargetIcon />
+                {reported ? averageText : unreported}
               </span>
             )}
             {desktopContextText && (
@@ -2248,10 +2276,14 @@ export function AppShell() {
                     const extraTokenRows = [
                        ...(sessionStats.cost > 0 ? [[translate("session.cost"), `$${sessionStats.cost.toFixed(4)}`]] : []),
                        ...(ctx?.contextWindow ? [[translate("session.context"), `${ctx.percent !== null ? `${ctx.percent.toFixed(1)}%` : "?"} / ${formatCompact(ctx.contextWindow)}`]] : []),
-                       // Cache hit rate = cache reads / (input + cache writes + cache reads) — the denominator covers all input-class tokens.
-                       ...(sessionStats.tokens.cacheRead + sessionStats.tokens.cacheWrite > 0 && sessionStats.tokens.cacheRead + sessionStats.tokens.cacheWrite + sessionStats.tokens.input > 0
-                         ? [[translate("session.cacheHitRate"), `${(sessionStats.tokens.cacheRead / (sessionStats.tokens.cacheRead + sessionStats.tokens.cacheWrite + sessionStats.tokens.input) * 100).toFixed(1)}%`]]
-                         : []),
+                       ...(sessionStats.tokens.total > 0 ? [
+                         [translate("session.lastHitRate"), sessionReportsCache(sessionStats.tokens)
+                           ? formatCacheHitPercent(sessionStats.lastTurn ? cacheHitPercent(sessionStats.lastTurn) : null, translate("session.cacheUnreported"))
+                           : translate("session.cacheUnreported")],
+                         [translate("session.cacheHitRate"), sessionReportsCache(sessionStats.tokens)
+                           ? formatCacheHitPercent(cacheHitPercent(sessionStats.tokens), translate("session.cacheUnreported"))
+                           : translate("session.cacheUnreported")],
+                       ] : []),
                     ];
                     const section = (
                       title: string,

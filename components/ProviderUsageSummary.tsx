@@ -25,6 +25,16 @@ type UsageResponse = { providerId: string; status: "ready" | "auth-unavailable" 
 
 const STORAGE_PREFIX = "pi-web:provider-usage:";
 
+function usageMessage(
+  code: string | undefined,
+  translate: (key: "providerUsage.noEndpoint" | "providerUsage.noKey" | "providerUsage.signIn" | "providerUsage.queryFailed") => string,
+): string {
+  if (code === "NO_USAGE_API") return translate("providerUsage.noEndpoint");
+  if (code === "NO_KEY") return translate("providerUsage.noKey");
+  if (code === "AUTH_REQUIRED") return translate("providerUsage.signIn");
+  return translate("providerUsage.queryFailed");
+}
+
 export function ProviderUsageSummary({ providerId, enabled }: { providerId: string; enabled: boolean }) {
   if (!isProviderUsageId(providerId)) return null;
   return <ProviderUsageContent providerId={providerId} enabled={enabled} />;
@@ -77,7 +87,7 @@ function ProviderUsageContent({ providerId, enabled }: { providerId: string; ena
         if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = setTimeout(() => setRefreshDone(false), 2000);
       } else {
-        setError(result.message ?? t("providerUsage.queryFailed"));
+        setError(usageMessage(result.message, t));
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("providerUsage.queryFailed"));

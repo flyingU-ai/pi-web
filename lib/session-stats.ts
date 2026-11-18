@@ -124,3 +124,48 @@ export function computeSessionStats(entries: SessionEntry[]): SessionFileStats {
 
   return finishStats(stats);
 }
+
+export interface TurnTokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/** True when this session has reported a cache read or write at least once. */
+export function sessionReportsCache(tokens: { cacheRead: number; cacheWrite: number }): boolean {
+  return (tokens.cacheRead || 0) + (tokens.cacheWrite || 0) > 0;
+}
+
+/**
+ * Cache reads divided by every input-class token.
+ * `input` is the uncached remainder: pi subtracts cache read and write from
+ * the provider prompt total. A real miss with input and zero cache is 0.
+ * Returns null when this slice has no input-class tokens.
+ */
+export function cacheHitPercent(tokens: { input: number; cacheRead: number; cacheWrite: number }): number | null {
+  const denom = (tokens.input || 0) + (tokens.cacheRead || 0) + (tokens.cacheWrite || 0);
+  if (denom <= 0) return null;
+  return ((tokens.cacheRead || 0) / denom) * 100;
+}
+
+export function formatCacheHitPercent(percent: number | null, unreported: string): string {
+  if (percent === null || !Number.isFinite(percent)) return unreported;
+  return `${percent.toFixed(1)}%`;
+}
+
+export function latestAssistantUsage(
+  messages: readonly { role: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } }[],
+): TurnTokenUsage | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant" || !message.usage) continue;
+    return {
+      input: message.usage.input || 0,
+      output: message.usage.output || 0,
+      cacheRead: message.usage.cacheRead || 0,
+      cacheWrite: message.usage.cacheWrite || 0,
+    };
+  }
+  return null;
+}

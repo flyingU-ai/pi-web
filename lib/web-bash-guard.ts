@@ -35,12 +35,13 @@ export function isUnderPool(absPath: string): boolean {
   return /AgentSMarkDatePoolv2(?:\/|$)/i.test(p) || /\/DatePool(?:\/|$)/i.test(p);
 }
 
-/** $池/cache and DatePool root: file-index lists one level, never walks. */
+/** $池/cache, DatePool root, and image seas: list one page, never dump 5万切图. */
 export function isPoolHeavyDir(absPath: string): boolean {
   const p = String(absPath || "").replace(/\/+$/, "");
   if (!p) return false;
   if (isDatePoolRoot(p)) return true;
   const base = p.split("/").pop() || "";
+  if (base === "_crops" || base === "jpegimages" || base === "JPEGImages") return true;
   if (base === "cache") {
     const parent = p.slice(0, Math.max(0, p.length - "/cache".length));
     if (isDatePoolRoot(parent) || isUnderPool(parent)) return true;

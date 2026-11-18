@@ -9,7 +9,7 @@ import { validateAgentImages } from "./image-attachments";
 import { invalidateModelsCache } from "./models-cache";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
 import { findDeferredModel, rememberProviderModels } from "./deferred-provider-models";
-import { enabledModelsForAdmin } from "./admin-enabled-models";
+import { enabledModelsForAdmin, readAdminCredentialProviders, withStoredProviderCatalog } from "./admin-enabled-models";
 import { createAdminModelRuntime } from "./model-runtime";
 import { createAdminPathGateExtension } from "./admin-path-gate";
 import {
@@ -2474,12 +2474,10 @@ export async function startRpcSession(
           },
       ...(trustReloadOptions ? { resourceLoaderReloadOptions: trustReloadOptions } : {}),
     });
+    const adminLeaf = adminFromSessionFile(sessionFile) || currentWebAdmin();
     const scope = await resolveVisibleModels(
-      services.modelRuntime,
-      enabledModelsForAdmin(
-        services.settingsManager,
-        adminFromSessionFile(sessionFile) || currentWebAdmin(),
-      ),
+      withStoredProviderCatalog(services.modelRuntime, readAdminCredentialProviders(adminLeaf)),
+      enabledModelsForAdmin(services.settingsManager, adminLeaf),
     );
     // A provider an extension registers only at session_start (lib/deferred-provider-models.ts)
     // has no model in this runtime yet: build on the default, switch once extensions are bound.

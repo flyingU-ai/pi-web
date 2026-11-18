@@ -7,7 +7,7 @@ import { isVirtualCodeMount, resolveDualRootPath, VIRTUAL_CODE_HOME } from "./du
 import { denyCrossAdminPath, getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed } from "./file-access";
 import { hasParentDirectorySegment } from "./path-security";
 
-export const CODE_MUTATE_ACTIONS = ["mkdir", "create-file", "rename", "move", "delete", "merge"] as const;
+export const CODE_MUTATE_ACTIONS = ["mkdir", "create-file", "rename", "move", "delete", "merge", "write"] as const;
 export type CodeMutateAction = (typeof CODE_MUTATE_ACTIONS)[number];
 
 const BLOCKED_NAMES = new Set(["", ".", "..", ".git"]);
@@ -134,6 +134,20 @@ export async function mutateCodeEntry(
   if (!source.ok) return { status: source.status, payload: { error: source.error } };
   if (action === "delete" && !isInsideCodeRoot(source.path, admin, false)) {
     return { status: 403, payload: { error: "Cannot delete the code root" } };
+  }
+
+  if (action === "write") {
+    if (!statSync(source.path).isFile()) {
+      return { status: 400, payload: { error: "Not a file" } };
+    }
+    if (typeof body.content !== "string") {
+      return { status: 400, payload: { error: "content required" } };
+    }
+    if (Buffer.byteLength(body.content, "utf8") > 8 * 1024 * 1024) {
+      return { status: 413, payload: { error: "File too large to save here (8MB)" } };
+    }
+    writeFileSync(source.path, body.content, { encoding: "utf8" });
+    return { status: 200, payload: { ok: true, action, path: source.path } };
   }
 
   if (action === "delete") {

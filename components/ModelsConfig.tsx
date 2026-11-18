@@ -1609,13 +1609,15 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
         setSavedOk(true);
         setTimeout(() => setSavedOk(false), 2000);
         onRefresh();
+        enabledModels.refresh();
+        window.dispatchEvent(new Event("pi-web-models-refresh"));
       }
     } catch (e) {
       setError(String(e));
     } finally {
       setSaving(false);
     }
-  }, [apiKey, provider.id, onRefresh]);
+  }, [apiKey, enabledModels, provider.id, onRefresh]);
 
   const handleRemove = useCallback(async () => {
     setRemoving(true);
@@ -1624,13 +1626,17 @@ function ApiKeyDetail({ provider, onRefresh, enabledModels }: {
       const res = await fetch(`/api/auth/api-key/${encodeURIComponent(provider.id)}`, { method: "DELETE" });
       const d = await res.json() as { success?: boolean; error?: string };
       if (!res.ok || d.error) setError(d.error ?? `HTTP ${res.status}`);
-      else onRefresh();
+      else {
+        onRefresh();
+        enabledModels.refresh();
+        window.dispatchEvent(new Event("pi-web-models-refresh"));
+      }
     } catch (e) {
       setError(String(e));
     } finally {
       setRemoving(false);
     }
-  }, [provider.id, onRefresh]);
+  }, [enabledModels, provider.id, onRefresh]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>

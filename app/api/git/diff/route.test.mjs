@@ -147,7 +147,7 @@ test("virtual code extra-mount path returns a patch through the zone symlink", a
     const virtualFile = path.join(warehouse, "code", "promptDet", "tracked.py");
     const response = await GET(new NextRequest(
       `http://localhost/api/git/diff?cwd=${encodeURIComponent(warehouse)}&path=${encodeURIComponent(virtualFile)}`,
-      { headers: { "x-aoi-admin": "flyingu" } },
+      { headers: { cookie: "aoi_admin=flyingu" } },
     ));
     assert.equal(response.status, 200);
     const result = await response.json();

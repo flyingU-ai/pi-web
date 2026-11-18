@@ -5,7 +5,9 @@
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { getBuiltinModels, getBuiltinProviders, type BuiltinProvider } from "@earendil-works/pi-ai/providers/all";
+import type { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { writePrivateFileAtomicSync } from "./atomic-file";
 import { isBlockedAdminLeaf } from "./admin-leaf";
 import { sanitizeWebAdmin, scopedAuthPath, sessionsStoreRoot } from "./web-admin-scope";
@@ -66,8 +68,8 @@ export function readAdminCredentialProviders(admin: string): Set<string> {
 
 /**
  * Local models stay shared. A cloud pattern is visible only when this leaf
- * has that provider's credential. A saved key also enables `provider/*`
- * without writing the shared settings file.
+ * has that provider's credential. A saved key does not turn the provider
+ * back on — the overlay is the only switch.
  */
 export function enabledModelsForAdmin(
   settingsManager: SettingsManager,
@@ -81,12 +83,43 @@ export function enabledModelsForAdmin(
     if (!provider || provider === "*" || LOCAL_MODEL_PROVIDERS.has(provider)) return true;
     return credentials.has(provider);
   });
-  for (const provider of credentials) {
-    if (LOCAL_MODEL_PROVIDERS.has(provider)) continue;
-    if (!kept.some((pattern) => providerIdFromPattern(pattern) === provider)) {
-      kept.push(`${provider}/*`);
-    }
-  }
   if (kept.length === 0) kept.push("llamacpp/**");
   return kept;
+}
+
+/**
+ * Built-in models for a provider that already has a key but is missing from the
+ * availability snapshot. The static catalog is not a network call and does not
+ * prove the key has balance.
+ */
+export function modelsMissingFromSnapshot(
+  available: readonly Model<Api>[],
+  providers: ReadonlySet<string>,
+): Model<Api>[] {
+  const present = new Set(available.map((model) => model.provider));
+  const builtin = new Set<string>(getBuiltinProviders());
+  const extra: Model<Api>[] = [];
+  for (const provider of providers) {
+    if (!provider || present.has(provider) || LOCAL_MODEL_PROVIDERS.has(provider) || !builtin.has(provider)) continue;
+    extra.push(...getBuiltinModels(provider as BuiltinProvider));
+  }
+  return extra;
+}
+
+/** getAvailable() plus the static catalog for credential providers it left out. */
+export function withStoredProviderCatalog(runtime: ModelRuntime, providers: ReadonlySet<string>): ModelRuntime {
+  return new Proxy(runtime, {
+    get(target, property, receiver) {
+      if (property !== "getAvailable") {
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async (...args: Parameters<ModelRuntime["getAvailable"]>) => {
+        const available = await target.getAvailable(...args);
+        const [providerId] = args;
+        const wanted = providerId ? new Set([providerId]) : providers;
+        return [...available, ...modelsMissingFromSnapshot(available, wanted)];
+      };
+    },
+  });
 }

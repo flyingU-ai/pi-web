@@ -70,7 +70,7 @@ test("virtual code/promptDet status maps extra-mount diffs back to DatePool path
     delete globalThis.__piAllowedRootsCacheByAdmin;
 
     const empty = await GET(new NextRequest(`http://localhost/api/git/status?cwd=${encodeURIComponent(warehouse)}`, {
-      headers: { "x-aoi-admin": "flyingu" },
+      headers: { cookie: "aoi_admin=flyingu" },
     }));
     const emptyBody = await empty.json();
     assert.equal(empty.status, 200, JSON.stringify(emptyBody));
@@ -84,7 +84,7 @@ test("virtual code/promptDet status maps extra-mount diffs back to DatePool path
 
     const virtual = join(warehouse, "code", "promptDet");
     const response = await GET(new NextRequest(`http://localhost/api/git/status?cwd=${encodeURIComponent(virtual)}`, {
-      headers: { "x-aoi-admin": "flyingu" },
+      headers: { cookie: "aoi_admin=flyingu" },
     }));
     const body = await response.json();
     assert.equal(response.status, 200, JSON.stringify(body));
@@ -157,7 +157,7 @@ test("folder-of-repos extra does not union child status; child repo is scanned a
 
     const extraVirtual = join(warehouse, "code", "promptDet");
     const extraRes = await GET(new NextRequest(`http://localhost/api/git/status?cwd=${encodeURIComponent(extraVirtual)}`, {
-      headers: { "x-aoi-admin": "flyingu" },
+      headers: { cookie: "aoi_admin=flyingu" },
     }));
     const extraBody = await extraRes.json();
     assert.equal(extraRes.status, 200, JSON.stringify(extraBody));
@@ -167,7 +167,7 @@ test("folder-of-repos extra does not union child status; child repo is scanned a
 
     const childVirtual = join(warehouse, "code", "promptDet", "LitDeepFlow");
     const childRes = await GET(new NextRequest(`http://localhost/api/git/status?cwd=${encodeURIComponent(childVirtual)}`, {
-      headers: { "x-aoi-admin": "flyingu" },
+      headers: { cookie: "aoi_admin=flyingu" },
     }));
     const childBody = await childRes.json();
     assert.equal(childRes.status, 200, JSON.stringify(childBody));

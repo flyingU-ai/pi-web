@@ -18,6 +18,11 @@ interface Props {
   scrollContainer: RefObject<HTMLDivElement | null>;
   messageRefs: RefObject<(HTMLDivElement | null)[]>;
   onRevealHistory: () => void;
+  entryIds?: readonly string[];
+  rangeStart?: string;
+  rangeEnd?: string;
+  pairHint?: string | null;
+  onSelectTurn?: (userEntryId: string) => void;
 }
 
 const MINIMAP_WIDTH = 36;
@@ -37,6 +42,8 @@ interface TurnInfo {
   scrollTop: number | null;
   /** Tool calls issued anywhere in this turn's assistant replies. */
   toolCount: number;
+  userEntryId: string;
+  throughEntryId: string;
 }
 
 interface NodeInfo {
@@ -245,6 +252,11 @@ export function ChatMinimap({
   scrollContainer,
   messageRefs,
   onRevealHistory,
+  entryIds = [],
+  rangeStart,
+  rangeEnd,
+  pairHint,
+  onSelectTurn,
 }: Props) {
   const { t } = useI18n();
   const [visible, setVisible] = useState(false);
@@ -254,6 +266,8 @@ export function ChatMinimap({
   const [minimapHovered, setMinimapHovered] = useState(false);
   const [mouseYRatio, setMouseYRatio] = useState<number | null>(null);
   const draggingRef = useRef(false);
+  const dragMovedRef = useRef(false);
+  const dragOriginRef = useRef<{ x: number; y: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const allNodesRef = useRef<NodeInfo[]>([]);
   const nodeLayoutRef = useRef<NodeLayout>({
@@ -278,6 +292,8 @@ export function ChatMinimap({
   );
   const allMessagesRef = useRef(allMessages);
   allMessagesRef.current = allMessages;
+  const entryIdsRef = useRef(entryIds);
+  entryIdsRef.current = entryIds;
 
   const nodeLayout = useMemo(
     () => layoutNodes(allNodes, minimapHeight),
@@ -341,11 +357,12 @@ export function ChatMinimap({
       let refIndex = 0;
       let currentTurn: TurnInfo | null = null;
 
-      for (const message of allMessagesRef.current) {
+      allMessagesRef.current.forEach((message, messageIndex) => {
         const isAnchor = isMessageGroupAnchor(message);
-        if (!isAnchor && message.role !== "assistant") continue;
+        if (!isAnchor && message.role !== "assistant") return;
         const element = refs?.[refIndex];
         refIndex++;
+        const entryId = entryIdsRef.current[messageIndex] || "";
 
         if (isAnchor) {
           currentTurn = null;
@@ -357,12 +374,15 @@ export function ChatMinimap({
               ? elementRect.top - containerRect.top + scrollEl.scrollTop
               : null,
             toolCount: 0,
+            userEntryId: message.role === "user" ? entryId : "",
+            throughEntryId: entryId,
           };
           turns.push(currentTurn);
-          continue;
+          return;
         }
 
-        if (!currentTurn) continue;
+        if (!currentTurn) return;
+        currentTurn.throughEntryId = entryId || currentTurn.throughEntryId;
         currentTurn.toolCount += countToolCalls(message);
         const answerMarkdown = getAssistantAnswerMarkdown(message);
         if (answerMarkdown) {
@@ -371,7 +391,7 @@ export function ChatMinimap({
             element,
           });
         }
-      }
+      });
 
       const nextNodes = createTurnNodes(turns);
       setMinimapHeight(minimapEl.clientHeight);
@@ -449,7 +469,7 @@ export function ChatMinimap({
       updateScroll();
     }, 50);
     return () => clearTimeout(timeout);
-  }, [messages.length, measureNodes, updateScroll]);
+  }, [messages.length, entryIds.length, measureNodes, updateScroll]);
 
   const scrollToNode = useCallback((node: NodeInfo, behavior: ScrollBehavior) => {
     const scrollEl = scrollContainer.current;
@@ -569,6 +589,8 @@ export function ChatMinimap({
     if (!visible) return;
 
     draggingRef.current = true;
+    dragMovedRef.current = false;
+    dragOriginRef.current = { x: event.clientX, y: event.clientY };
     showPreview();
     const rect = event.currentTarget.getBoundingClientRect();
     const pointerRatio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
@@ -584,6 +606,10 @@ export function ChatMinimap({
     jumpToPointer(event.clientY, "smooth");
     const onMove = (moveEvent: MouseEvent) => {
       if (!draggingRef.current) return;
+      const origin = dragOriginRef.current;
+      if (origin && Math.hypot(moveEvent.clientX - origin.x, moveEvent.clientY - origin.y) > 4) {
+        dragMovedRef.current = true;
+      }
       jumpToPointer(moveEvent.clientY, "auto");
     };
     const onUp = () => {
@@ -594,6 +620,17 @@ export function ChatMinimap({
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   }, [findNearestNode, scrollToNode, showPreview, visible]);
+
+  const handleDoubleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!onSelectTurn || dragMovedRef.current) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0;
+    const node = findNearestNode(ratio);
+    const userEntryId = node?.targetTurn.userEntryId;
+    if (!userEntryId) return;
+    event.preventDefault();
+    onSelectTurn(userEntryId);
+  }, [findNearestNode, onSelectTurn]);
 
   const nearestNode = mouseYRatio === null ? null : findNearestNode(mouseYRatio);
   const nearestNodeIndex = nearestNode?.index ?? null;
@@ -619,6 +656,8 @@ export function ChatMinimap({
     <div
       ref={containerRef}
       onMouseDown={handleMouseDown}
+      onDoubleClick={handleDoubleClick}
+      title={onSelectTurn ? [t("pair.mark"), pairHint || ""].filter(Boolean).join(" ") : undefined}
       onMouseEnter={showPreview}
       onMouseLeave={schedulePreviewHide}
       onMouseMove={(event) => {
@@ -652,6 +691,14 @@ export function ChatMinimap({
       {positionedNodes.map((node) => {
         const isNearest = minimapHovered && nearestNode?.index === node.index;
         const isActive = activeIndex === node.index;
+        const startIndex = positionedNodes.findIndex((item) => item.targetTurn.userEntryId && item.targetTurn.userEntryId === rangeStart);
+        const endIndex = positionedNodes.findIndex((item) => item.targetTurn.userEntryId && item.targetTurn.userEntryId === rangeEnd);
+        const selected = startIndex >= 0 && endIndex >= 0
+          ? node.index >= Math.min(startIndex, endIndex) && node.index <= Math.max(startIndex, endIndex)
+          : node.index === (startIndex >= 0 ? startIndex : endIndex);
+        const endpoint = node.index === startIndex || node.index === endIndex;
+        const idleBorder = isActive ? "rgba(128,128,128,0.95)" : "rgba(128,128,128,0.58)";
+        const idleFill = isActive ? "rgba(128,128,128,0.42)" : "rgba(128,128,128,0.16)";
 
         return (
           <div
@@ -677,8 +724,8 @@ export function ChatMinimap({
                 width: 8,
                 height: 8,
                 borderRadius: 2,
-                background: isActive ? "rgba(128,128,128,0.42)" : "rgba(128,128,128,0.16)",
-                border: `1.5px solid ${isActive ? "rgba(128,128,128,0.95)" : "rgba(128,128,128,0.58)"}`,
+                background: endpoint ? "var(--accent)" : selected ? "rgba(37,99,235,0.55)" : idleFill,
+                border: `1.5px solid ${endpoint || selected ? "var(--accent)" : idleBorder}`,
                 boxShadow: isActive ? "0 0 0 2px var(--bg-panel)" : "none",
                 transition: "transform 0.1s, background 0.1s",
                 transform: isNearest ? "scale(1.25)" : "scale(1)",

@@ -1,5 +1,5 @@
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ProviderUsageId } from "./provider-usage-ids";
+import { createAdminModelRuntime } from "./model-runtime";
 
 export { PROVIDER_USAGE_IDS, isProviderUsageId, type ProviderUsageId } from "./provider-usage-ids";
 
@@ -75,22 +75,32 @@ const CURRENCY: Record<"moonshotai" | "moonshotai-cn" | "minimax" | "minimax-cn"
 };
 
 export async function queryProviderUsage(providerId: ProviderUsageId): Promise<ProviderUsageResult> {
-  const runtime = await ModelRuntime.create({ refreshOnCreate: false });
+  let runtime: Awaited<ReturnType<typeof createAdminModelRuntime>>;
+  try {
+    runtime = await createAdminModelRuntime();
+  } catch (error) {
+    const required = error instanceof Error && error.message === "admin required";
+    return {
+      providerId,
+      status: "auth-unavailable",
+      message: required ? "AUTH_REQUIRED" : "NO_KEY",
+    };
+  }
   const provider = runtime.getProvider(providerId);
   // Catalog providers such as opencode-go carry their base URL per model rather than on the
   // provider, so fall back to the first model before rejecting a non-official origin.
   const baseUrl = provider?.baseUrl ?? provider?.getModels()[0]?.baseUrl;
   if (!provider || !isOfficialProviderUsageOrigin(providerId, baseUrl)) {
-    return { providerId, status: "query-failed", message: "The provider usage query failed." };
+    return { providerId, status: "query-failed", message: "NO_USAGE_API" };
   }
   let resolved;
   try {
     resolved = await runtime.getAuth(providerId);
   } catch {
-    return { providerId, status: "auth-unavailable", message: "Provider authentication is unavailable." };
+    return { providerId, status: "auth-unavailable", message: "NO_KEY" };
   }
   if (!resolved) {
-    return { providerId, status: "auth-unavailable", message: "Connect this provider before querying usage." };
+    return { providerId, status: "auth-unavailable", message: "NO_KEY" };
   }
 
   try {

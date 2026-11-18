@@ -5,6 +5,7 @@ import { resolveAdminAuthPath } from "@/lib/model-runtime";
 import { ModelsConfigReadError, readModelsConfig, writeModelsConfig } from "@/lib/models-config-store";
 import {
   detachSharedProviderApiKeys,
+  lockSharedEndpoints,
   markStoredApiKeys,
   readLocalProviderSecrets,
   stripProviderApiKeys,
@@ -58,7 +59,9 @@ export async function PUT(req: Request) {
   try {
     const body = await req.json() as Record<string, unknown>;
     detachSharedProviderApiKeys();
+    const current = readModelsConfig();
     const { config, keys } = stripProviderApiKeys(body);
+    const saved = lockSharedEndpoints(config, current);
     if (Object.keys(keys).length > 0) {
       let authPath = "";
       try {
@@ -76,7 +79,7 @@ export async function PUT(req: Request) {
         if (admin) await applyAdminRuntimeApiKey(admin, providerId, apiKey);
       }
     }
-    writeModelsConfig(config);
+    writeModelsConfig(saved);
     return NextResponse.json({ success: true });
   } catch (error) {
     if (error instanceof ModelsConfigReadError) {

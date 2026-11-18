@@ -118,6 +118,20 @@ export type EnabledModelsEdit =
   | { ok: true; patterns: string[] | undefined; changed: boolean }
   | { ok: false; reason: "last-model" };
 
+const LOCAL_MODEL_PROVIDERS = new Set(["llamacpp", "llamacpp-gguf"]);
+
+function isLocalRef(ref: string): boolean {
+  return LOCAL_MODEL_PROVIDERS.has(modelRefProvider(ref));
+}
+
+function isLocalPattern(pattern: string): boolean {
+  const body = pattern.trim();
+  if (!body) return false;
+  const slash = body.indexOf("/");
+  const provider = (slash < 0 ? body : body.slice(0, slash)).split(":")[0] ?? "";
+  return LOCAL_MODEL_PROVIDERS.has(provider);
+}
+
 /** Provider id of a `provider/modelId` reference (model ids may contain `/`). */
 export function modelRefProvider(ref: string): string {
   const slash = ref.indexOf("/");
@@ -289,9 +303,9 @@ export function computeEnabledModelsState(input: EnabledModelsInput): EnabledMod
 /**
  * Turn `refs` on or off with the smallest possible edit of the pattern list.
  *
- * Returns `{ ok: false, reason: "last-model" }` when the edit would leave no
- * enabled model: pi treats an empty scope as "no scope" and shows every model
- * again, so disabling the last one would silently mean the opposite.
+ * Returns `{ ok: false, reason: "last-model" }` only when the last local
+ * (`llamacpp`) model would disappear. Cloud providers can all be switched off;
+ * an empty cloud list falls back to `llamacpp/**`.
  */
 export function setModelsEnabled(
   input: EnabledModelsInput,
@@ -324,7 +338,17 @@ export function setModelsEnabled(
         next.push({ pattern: formatEntry(ref, entry.pin), matched: [ref], ...(entry.pin ? { pin: entry.pin } : {}) });
       }
     }
-    if (enabledRefs(next).length === 0) return { ok: false, reason: "last-model" };
+    if (enabledRefs(next).length === 0) {
+      const disablingLocal = targets.some((ref) => isLocalRef(ref));
+      const localPatternRemains = next.some((entry) => isLocalPattern(entry.pattern));
+      if (disablingLocal && !localPatternRemains) {
+        return { ok: false, reason: "last-model" };
+      }
+      if (!localPatternRemains) {
+        const localRefs = input.availableRefs.filter((ref) => isLocalRef(ref));
+        next.push({ pattern: "llamacpp/**", matched: localRefs });
+      }
+    }
     entries = next;
   }
 

@@ -43,7 +43,12 @@ export function getRelativeFilePath(filePath: string, cwd?: string): string {
 }
 
 export function joinFilePath(parent: string, child: string): string {
-  return `${normalizeFilePathSlashes(parent).replace(/\/+$/, "")}/${child}`;
+  const normalized = normalizeFilePathSlashes(parent);
+  const p = normalized === "/" ? "/" : normalized.replace(/\/+$/, "");
+  const c = String(child || "").replace(/^\/+/, "");
+  if (!p) return c;
+  if (p === "/") return `/${c}`;
+  return `${p}/${c}`;
 }
 
 export function isUnderCodeZone(target: string, codeRoot?: string | null): boolean {

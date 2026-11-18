@@ -3,7 +3,6 @@ import { getAdditionalAllowedRoots, getAllowedRootsCacheMap, allowedRootsCacheKe
 import { allAdminCodeRoots, isForeignAdminCodePath } from "./admin-workspaces";
 import { isForeignTermWorkspace, terminalWorkspaceRoot } from "./dual-roots";
 import { isExistingPathWithinRoots, isPathWithinRoots } from "./path-security";
-import { listAllSessions } from "./session-reader";
 import { isHostPrivateAdminPath, resolveCurrentAdminAsync, sanitizeWebAdmin, warehouseRoot } from "./web-admin-scope";
 export { allowFileRoot, normalizeSlashes } from "./allowed-roots";
 export { isWindowsAbsolutePath } from "./paths";
@@ -40,13 +39,7 @@ export async function getAllowedFileRoots(adminHint = ""): Promise<Set<string>> 
   const cached = cacheMap.get(cacheKey);
   if (cached && cached.expiresAt > now) return cached.roots;
 
-  const sessions = await listAllSessions();
   const roots = new Set<string>();
-  for (const s of sessions) {
-    if (s.cwd && isUsableRoot(s.cwd, admin)) roots.add(normalizeSlashes(s.cwd));
-    if (s.projectRoot && isUsableRoot(s.projectRoot, admin)) roots.add(normalizeSlashes(s.projectRoot));
-  }
-
   const warehouse = warehouseRoot();
   if (warehouse) rememberRoot(roots, warehouse);
 

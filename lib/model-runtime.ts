@@ -4,19 +4,48 @@ import {
   getAgentDir,
   ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
+import { isBlockedAdminLeaf } from "./admin-leaf";
 import { rememberProviderModels } from "./deferred-provider-models";
-import { resolveCurrentAdminAsync, scopedAuthPath } from "./web-admin-scope";
+import { readLocalProviderSecrets } from "./models-config-secrets";
+import { multiUserMode, resolveCurrentAdminAsync, scopedAuthPath, warehouseRoot } from "./web-admin-scope";
 
 export async function resolveAdminAuthPath(): Promise<string> {
-  const scoped = scopedAuthPath(await resolveCurrentAdminAsync());
-  return scoped || join(getAgentDir(), "auth.json");
+  if (!warehouseRoot()) {
+    if (multiUserMode()) throw new Error("admin required");
+    return join(getAgentDir(), "auth.json");
+  }
+  const admin = await resolveCurrentAdminAsync();
+  if (!admin || isBlockedAdminLeaf(admin)) {
+    throw new Error("admin required");
+  }
+  const scoped = scopedAuthPath(admin);
+  if (!scoped) throw new Error("admin required");
+  return scoped;
 }
 
 export async function createAdminModelRuntime(): Promise<ModelRuntime> {
-  return ModelRuntime.create({
+  const runtime = await ModelRuntime.create({
     authPath: await resolveAdminAuthPath(),
     refreshOnCreate: false,
   });
+  await injectLocalProviderSecrets(runtime);
+  return runtime;
+}
+
+/** Local llama keys stay on this machine. They are not copied into each admin's auth.json. */
+async function injectLocalProviderSecrets(runtime: ModelRuntime): Promise<void> {
+  const secrets = readLocalProviderSecrets();
+  for (const [providerId, apiKey] of Object.entries(secrets)) {
+    if (!apiKey) continue;
+    try {
+      const status = runtime.getProviderAuthStatus(providerId);
+      if (status.configured && status.source === "stored") continue;
+      if (status.configured && status.source === "models_json_key") continue;
+      await runtime.setRuntimeApiKey(providerId, apiKey);
+    } catch {
+      // The catalog may not know this provider yet.
+    }
+  }
 }
 
 /**

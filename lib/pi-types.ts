@@ -53,6 +53,13 @@ export interface SessionStatsInfo {
     total: number;
   };
   cost: number;
+  /** Latest assistant usage in the loaded leaf. Null when that message has no usage. */
+  lastTurn?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  } | null;
   contextUsage?: ContextUsage;
   /** Estimated active time across all entries in the session file. */
   totalActiveMs?: number;

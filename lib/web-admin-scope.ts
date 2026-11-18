@@ -31,6 +31,18 @@ export function warehouseRoot(): string {
   return folder ? resolvePath(folder) : "";
 }
 
+/**
+ * Isolation is "this process serves more than one person", not "a DatePool
+ * folder is open". Opening a warehouse must not turn on the login wall.
+ */
+export function multiUserMode(): boolean {
+  return Boolean(
+    String(process.env.PI_WEB_SESSIONS_ROOT || "").trim()
+    || String(process.env.PI_WEB_TICKET_SECRET || "").trim()
+    || String(process.env.PI_WEB_TICKET_SECRET_FILE || "").trim(),
+  );
+}
+
 export function currentWebAdmin(): string {
   return sanitizeWebAdmin(adminAls.getStore() || "");
 }
