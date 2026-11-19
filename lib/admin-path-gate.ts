@@ -14,6 +14,7 @@ import {
   legacyCodeHomesRoot,
   loadAdminExtraMounts,
 } from "./admin-workspaces";
+import { extraDataPoolRoots, isReadonlyDataPoolPath, READONLY_DATA_POOL_REASON } from "./data-pools";
 import { isForeignTermWorkspace, rewriteVirtualCodeText } from "./dual-roots";
 import { sanitizeWebAdmin, warehouseRoot } from "./web-admin-scope";
 
@@ -100,6 +101,7 @@ export function adminPathBlockReason(
     const blocked = privatePathBlock(abs, name, env);
     if (blocked) return blocked;
     if (isForeignAdminCodePath(abs, name, env) || isForeignTermWorkspace(abs, name)) return FOREIGN;
+    if (action === "write" && isReadonlyDataPoolPath(abs, env)) return READONLY_DATA_POOL_REASON;
     if (action === "write" && unregisteredHyfWrite(abs, name, env)) return HYF_WRITE;
   }
   return null;
@@ -124,6 +126,7 @@ export function sensitiveCommandPaths(command: string, env: NodeJS.ProcessEnv = 
   const prefixes = [HYF_ROOT, sessionsRoot(env), codeZonesRoot(env), legacyCodeHomesRoot(env)];
   const warehouse = warehouseOf(env);
   if (warehouse) prefixes.push(join(warehouse, "code"));
+  for (const poolRoot of extraDataPoolRoots(env)) prefixes.push(poolRoot);
   for (const mounts of Object.values(loadAdminExtraMounts(env))) {
     for (const mount of mounts) prefixes.push(mount.path);
   }
@@ -175,6 +178,7 @@ export function bashCommandBlockReason(
     const blocked = privatePathBlock(resolve(raw), name, env) || privatePathBlock(abs, name, env);
     if (blocked) return blocked;
     if (isForeignAdminCodePath(abs, name, env) || isForeignTermWorkspace(abs, name)) return FOREIGN;
+    if (isWriteDestination(rewritten, raw) && isReadonlyDataPoolPath(resolve(raw), env)) return READONLY_DATA_POOL_REASON;
     if (isWriteDestination(rewritten, raw) && unregisteredHyfWrite(resolve(raw), name, env)) return HYF_WRITE;
   }
   return null;

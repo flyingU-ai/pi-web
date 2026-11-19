@@ -4,7 +4,6 @@ import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, typ
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
-import { AdminUsageCard } from "./AdminUsageCard";
 import { ChatWindow } from "./ChatWindow";
 import type { ChatScrollPosition } from "@/lib/chat-scroll-position";
 import { FileViewer } from "./FileViewer";
@@ -1309,7 +1308,6 @@ export function AppShell() {
         onSessionsChange={handleSessionsChange}
         storageScope={scopedWorkspaceKey(selectedSession?.projectKey || selectedSession?.cwd || newSessionCwd || "", adminName)}
       />
-      <AdminUsageCard />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
           ["models", translate("common.models")],

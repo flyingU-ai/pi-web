@@ -59,6 +59,7 @@ interface FileData {
   size: number;
   nextOffset: number;
   truncated: boolean;
+  writable?: boolean;
 }
 
 const SOURCE_HIGHLIGHT_MAX_LINES = 1_000;
@@ -1376,6 +1377,7 @@ function TextFileViewer({
   const isDeletedDiff = hasGitDiff && gitDiff.status === "deleted";
   const canEditSource = Boolean(
     data
+    && data.writable !== false
     && !data.truncated
     && !isDeletedDiff
     && !isImagePath(filePath)
@@ -1432,17 +1434,18 @@ function TextFileViewer({
   }, [requestedInitialDisplayMode, hasGitDiff, updateDisplayMode]);
 
   const markdownPreview = useMemo(
-    () => (data?.language === "markdown" ? normalizeDisplayMath(data.content) : ""),
-    [data],
+    () => (data?.language === "markdown" ? normalizeDisplayMath(canEditSource ? draft : data.content) : ""),
+    [canEditSource, data, draft],
   );
 
   const frontmatter = useMemo(
-    () => (data?.language === "markdown" ? parseFrontmatter(data.content) : null),
-    [data],
+    () => (data?.language === "markdown" ? parseFrontmatter(canEditSource ? draft : data.content) : null),
+    [canEditSource, data, draft],
   );
 
   const viewerContent = data?.content ?? "";
-  const sourceLines = useMemo(() => viewerContent.split("\n"), [viewerContent]);
+  const sourceText = canEditSource ? draft : viewerContent;
+  const sourceLines = useMemo(() => sourceText.split("\n"), [sourceText]);
   const language = data?.language ?? "text";
   const isHtml = language === "html";
   const isMarkdown = language === "markdown";
@@ -1486,10 +1489,10 @@ function TextFileViewer({
         )}
         wrapLongLines={wrapLines}
       >
-        {viewerContent}
+        {sourceText || "\n"}
       </SyntaxHighlighter>
     ),
-    [isDark, language, viewerContent, wrapLines],
+    [isDark, language, sourceText, wrapLines],
   );
   const lightweightSourceLines = useMemo(
     () => useLightweightSource ? sourceLines.map((line, lineIndex) => (
@@ -1611,7 +1614,7 @@ function TextFileViewer({
 
   if (!data && !isDeletedDiff) return null;
 
-  const content = viewerContent;
+  const content = sourceText;
   const markdownDirectory = getFileDirectory(filePath);
   const lines = sourceLines;
   const displayModes: DisplayMode[] = isDeletedDiff
@@ -1676,7 +1679,7 @@ function TextFileViewer({
                       color: active ? "var(--text)" : "var(--text-muted)",
                     }}
                   >
-                    {mode === "source" && canEditSource ? t("files.edit") : DISPLAY_MODE_LABELS[mode]}
+                    {DISPLAY_MODE_LABELS[mode]}
                   </button>
                 );
               })}
@@ -1877,35 +1880,66 @@ function TextFileViewer({
               {markdownPreview}
             </ReactMarkdown>
           </div>
-        ) : effectiveDisplayMode === "source" && canEditSource ? (
-          <div style={{ display: "flex", alignItems: "stretch", minHeight: "100%", width: wrapLines ? "100%" : "max-content", minWidth: "100%" }}>
-            <div aria-hidden style={{ ...FILE_LINE_NUMBER_STYLE, lineHeight: "20.8px", paddingTop: 12 }}>
-              {draft.split("\n").map((_, index) => (
-                <div key={index}>{index + 1}</div>
-              ))}
-            </div>
-            <textarea
-              value={draft}
-              onChange={(event) => {
-                setDraft(event.target.value);
-                if (saveHint === "saved") setSaveHint("");
-              }}
-              spellCheck={false}
-              aria-label={t("files.edit")}
+        ) : effectiveDisplayMode === "source" ? (
+          <div
+            className="file-source-edit"
+            style={{
+              position: "relative",
+              minHeight: "100%",
+              width: wrapLines ? "100%" : "max-content",
+              minWidth: "100%",
+            }}
+          >
+            <div
+              aria-hidden={canEditSource}
+              className={useLightweightSource ? "file-source-view is-lightweight" : undefined}
               style={{
-                flex: 1,
+                pointerEvents: canEditSource ? "none" : undefined,
+                width: wrapLines ? "100%" : "max-content",
+                minWidth: "100%",
                 minHeight: "100%",
-                border: "none",
-                outline: "none",
-                resize: "none",
-                padding: "12px 16px",
                 background: "var(--bg)",
-                color: "var(--text)",
-                whiteSpace: wrapLines ? "pre-wrap" : "pre",
-                overflow: "hidden",
-                ...FILE_CODE_STYLE,
+                ...(useLightweightSource ? FILE_CODE_STYLE : null),
               }}
-            />
+            >
+              {useLightweightSource ? lightweightSourceLines : highlightedSource}
+            </div>
+            {canEditSource ? (
+              <textarea
+                value={draft}
+                onChange={(event) => {
+                  setDraft(event.target.value);
+                  if (saveHint === "saved") setSaveHint("");
+                }}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                autoComplete="off"
+                aria-label={t("files.edit")}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 1,
+                  boxSizing: "border-box",
+                  width: "100%",
+                  height: "100%",
+                  margin: 0,
+                  border: "none",
+                  outline: "none",
+                  resize: "none",
+                  padding: "0 0 0 48px",
+                  background: "transparent",
+                  color: "transparent",
+                  WebkitTextFillColor: "transparent",
+                  caretColor: "var(--text)",
+                  whiteSpace: wrapLines ? "pre-wrap" : "pre",
+                  overflowWrap: wrapLines ? "anywhere" : "normal",
+                  overflow: "hidden",
+                  tabSize: 4,
+                  ...FILE_CODE_STYLE,
+                }}
+              />
+            ) : null}
           </div>
         ) : useLightweightSource ? (
           <div

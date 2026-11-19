@@ -25,11 +25,11 @@ test("large source previews bypass the per-line syntax highlighter", () => {
   assert.match(lightweightSource, /className="file-source-line-content"/);
   assert.match(lightweightSource, /style=\{FILE_LINE_NUMBER_STYLE\}/);
 
-  // The lightweight branch still wins over the syntax highlighter in the JSX.
-  const branchStart = source.indexOf(") : useLightweightSource ? (");
-  assert.notEqual(branchStart, -1);
-  assert.match(source.slice(branchStart), /className="file-source-view is-lightweight"/);
-  assert.notEqual(source.indexOf("highlightedSource", branchStart), -1);
+  assert.match(source, /className="file-source-edit"/);
+  assert.match(source, /caretColor: "var\(--text\)"/);
+  assert.match(source, /pointerEvents: canEditSource \? "none"/);
+  assert.match(source, /DISPLAY_MODE_LABELS\[mode\]/);
+  assert.doesNotMatch(source, /mode === "source" && canEditSource \? t\("files\.edit"\)/);
 });
 
 test("lightweight source rows are skipped for highlighted, diff, and preview views", () => {
@@ -38,13 +38,15 @@ test("lightweight source rows are skipped for highlighted, diff, and preview vie
   const viewer = file.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "TextFileViewer");
   const calculations = viewer.body.statements.filter((node) =>
     ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) =>
-      ["viewerContent", "sourceLines", "language", "isHtml", "isMarkdown", "hasPreview", "effectiveDisplayMode", "useLightweightSource", "lightweightSourceLines"].includes(declaration.name.getText(file)),
+      ["viewerContent", "sourceText", "sourceLines", "language", "isHtml", "isMarkdown", "hasPreview", "effectiveDisplayMode", "useLightweightSource", "lightweightSourceLines"].includes(declaration.name.getText(file)),
     ),
   ).map((node) => node.getText(file)).join("\n");
   const { outputText } = ts.transpileModule(`
     return (data, displayMode, hasGitDiff = false, isDeletedDiff = false, wrapLines = false) => {
       const SOURCE_HIGHLIGHT_MAX_LINES = 1_000;
       const FILE_LINE_NUMBER_STYLE = {};
+      const canEditSource = false;
+      const draft = data.content ?? "";
       ${calculations}
       return lightweightSourceLines;
     };

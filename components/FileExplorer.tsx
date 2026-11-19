@@ -19,6 +19,11 @@ import type { FileIndexEntry } from "@/lib/file-fuzzy";
 import { uploadFiles, type UploadConflictStrategy, type UploadError, type UploadResponse } from "@/lib/file-upload-client";
 import { buildSearchTree, type SearchTreeNode } from "@/lib/search-tree";
 import { dataZoneVisualGroup, type DataZoneBand } from "@/lib/data-zone-bands";
+import {
+  dataPoolStorageScope,
+  readSelectedDataPoolId,
+  writeSelectedDataPoolId,
+} from "@/lib/data-pool-preference";
 import { useI18n } from "@/hooks/useI18n";
 type Translate = ReturnType<typeof useI18n>["t"];
 
@@ -95,6 +100,28 @@ async function responseError(res: Response, fallback: string): Promise<Error> {
 }
 
 type CodeMountHint = { ok: boolean; reason?: string };
+
+interface DataPoolInfo {
+  id: string;
+  label: string;
+  root: string;
+  role: "primary" | "attach";
+  readonly: boolean;
+}
+
+function browserAdmin(): string {
+  if (typeof window === "undefined") return "";
+  return String(new URLSearchParams(window.location.search).get("admin") || "").trim();
+}
+
+function browserStorage(): Pick<Storage, "getItem" | "setItem"> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 async function fetchList(dirPath: string, query = ""): Promise<{ nodes: FileNode[]; codeMount?: CodeMountHint; truncated?: boolean; hidden?: number; total?: number }> {
   const encoded = encodeFilePathForApi(dirPath);
@@ -839,6 +866,10 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 }, ref) {
   const { t } = useI18n();
   const [roots, setRoots] = useState<FileNode[]>([]);
+  const [dataPools, setDataPools] = useState<DataPoolInfo[]>([]);
+  const [selectedPoolId, setSelectedPoolId] = useState("live");
+  const [attachRoots, setAttachRoots] = useState<FileNode[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [codeMountHint, setCodeMountHint] = useState<CodeMountHint | null>(null);
@@ -980,13 +1011,19 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     () => roots.find((node) => node.name === "code" && node.isDir) ?? null,
     [roots],
   );
-  const dataRoots = useMemo(() => {
+  const selectedPool = useMemo(
+    () => dataPools.find((pool) => pool.id === selectedPoolId) ?? dataPools.find((pool) => pool.role === "primary") ?? null,
+    [dataPools, selectedPoolId],
+  );
+  const showingAttachPool = selectedPool?.role === "attach";
+  const liveDataRoots = useMemo(() => {
     const nodes = codeNode ? roots.filter((node) => node !== codeNode) : roots;
     if (!nodes.some((node) => node.dataBand)) return nodes;
     const order: Record<DataZoneBand, number> = { incoming: 0, infra: 1, train: 2, benchmark: 3 };
     return [...nodes].sort((a, b) =>
       order[a.dataBand ?? "train"] - order[b.dataBand ?? "train"] || a.name.localeCompare(b.name));
   }, [roots, codeNode]);
+  const dataRoots = showingAttachPool ? attachRoots : liveDataRoots;
   const codeRootPath = codeNode?.fullPath ?? "";
   const codeHomePath = codeRootPath ? joinFilePath(codeRootPath, "home") : "";
   useEffect(() => {
@@ -1190,6 +1227,46 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   }, [codeNode, cwd, refreshToken]);
 
   useEffect(() => () => onUploadBusyChange?.(false), [onUploadBusyChange]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/data-pools")
+      .then((res) => res.ok ? res.json() : { pools: [] })
+      .then((body: { pools?: DataPoolInfo[] }) => {
+        if (cancelled) return;
+        const pools = Array.isArray(body.pools) ? body.pools : [];
+        setDataPools(pools);
+        const scope = dataPoolStorageScope(cwd, browserAdmin());
+        const remembered = readSelectedDataPoolId(scope, browserStorage());
+        const valid = pools.some((pool) => pool.id === remembered);
+        setSelectedPoolId(valid ? remembered : (pools.find((pool) => pool.role === "primary")?.id || "live"));
+      })
+      .catch(() => {
+        if (!cancelled) setDataPools([]);
+      });
+    return () => { cancelled = true; };
+  }, [cwd]);
+
+  useEffect(() => {
+    if (!showingAttachPool || !selectedPool) {
+      setAttachRoots([]);
+      setAttachError(null);
+      return;
+    }
+    let cancelled = false;
+    setAttachError(null);
+    fetchList(selectedPool.root)
+      .then((listed) => {
+        if (cancelled) return;
+        setAttachRoots(listed.nodes.filter((node) => node.name !== "code"));
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setAttachRoots([]);
+        setAttachError(error instanceof Error ? error.message : String(error));
+      });
+    return () => { cancelled = true; };
+  }, [showingAttachPool, selectedPool, refreshKey, treeRefreshKey]);
 
   useEffect(() => {
     const cwdChanged = prevCwdRef.current !== cwd;
@@ -1653,6 +1730,8 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
                       height: 22,
                       display: "flex",
                       alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 6,
                       color: "#b45309",
                       fontSize: 10,
                       fontWeight: 700,
@@ -1660,11 +1739,44 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
                       textTransform: "uppercase",
                     }}
                   >
-                    {t("files.dataZone")}
+                    <span>{t("files.dataZone")}</span>
+                    {dataPools.length > 1 ? (
+                      <div style={{ display: "flex", overflow: "hidden", border: "1px solid color-mix(in srgb, #d97706 40%, var(--border))", borderRadius: 4, textTransform: "none", letterSpacing: 0, fontWeight: 600 }}>
+                        {dataPools.map((pool) => {
+                          const active = pool.id === (selectedPool?.id || selectedPoolId);
+                          return (
+                            <button
+                              key={pool.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedPoolId(pool.id);
+                                writeSelectedDataPoolId(dataPoolStorageScope(cwd, browserAdmin()), pool.id, browserStorage());
+                              }}
+                              title={pool.root}
+                              style={{
+                                height: 18,
+                                padding: "0 6px",
+                                border: 0,
+                                background: active ? "color-mix(in srgb, #d97706 22%, transparent)" : "transparent",
+                                color: "#b45309",
+                                cursor: "pointer",
+                                font: "inherit",
+                                fontSize: 10,
+                              }}
+                            >
+                              {pool.role === "primary" ? t("files.dataPoolLive") : pool.label || t("files.dataPoolAttach")}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                   </div>
                   <div style={{ padding: "2px 10px 4px", fontSize: 10, color: "#b45309" }}>
-                    {t("files.dataZoneHint")}
+                    {showingAttachPool ? t("files.dataPoolReadonlyHint") : t("files.dataZoneHint")}
                   </div>
+                  {attachError && showingAttachPool ? (
+                    <div style={{ padding: "2px 10px 6px", fontSize: 10, color: "#b91c1c" }}>{attachError}</div>
+                  ) : null}
                   {dataRoots.map((node, index) => {
                     const group = node.dataBand ? dataZoneVisualGroup(node.dataBand) : "";
                     const previous = index > 0 && dataRoots[index - 1].dataBand

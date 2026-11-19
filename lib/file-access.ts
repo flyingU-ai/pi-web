@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs";
 import { getAdditionalAllowedRoots, getAllowedRootsCacheMap, allowedRootsCacheKey, normalizeSlashes } from "./allowed-roots";
 import { allAdminCodeRoots, isForeignAdminCodePath } from "./admin-workspaces";
+import { extraDataPoolRoots } from "./data-pools";
 import { isForeignTermWorkspace, terminalWorkspaceRoot } from "./dual-roots";
 import { isExistingPathWithinRoots, isPathWithinRoots } from "./path-security";
 import { isHostPrivateAdminPath, resolveCurrentAdminAsync, sanitizeWebAdmin, warehouseRoot } from "./web-admin-scope";
@@ -42,6 +43,9 @@ export async function getAllowedFileRoots(adminHint = ""): Promise<Set<string>> 
   const roots = new Set<string>();
   const warehouse = warehouseRoot();
   if (warehouse) rememberRoot(roots, warehouse);
+  for (const poolRoot of extraDataPoolRoots()) {
+    rememberRoot(roots, poolRoot);
+  }
 
   for (const codeRoot of allAdminCodeRoots(admin)) {
     rememberRoot(roots, codeRoot);

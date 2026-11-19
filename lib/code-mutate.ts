@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, write
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { adminCodeHome, adminCodeZone, allAdminCodeRoots, extraMountsFor } from "./admin-workspaces";
 import { isVirtualCodeMount, resolveDualRootPath, VIRTUAL_CODE_HOME } from "./dual-roots";
+import { isReadonlyDataPoolPath, READONLY_DATA_POOL_REASON } from "./data-pools";
 import { denyCrossAdminPath, getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed } from "./file-access";
 import { hasParentDirectorySegment } from "./path-security";
 
@@ -56,6 +57,9 @@ async function authorize(
     return { ok: false, status: 400, error: "Invalid path" };
   }
   const resolved = resolveDualRootPath(requestedCodePath(requested, admin), admin);
+  if (isReadonlyDataPoolPath(resolved) || isReadonlyDataPoolPath(requested)) {
+    return { ok: false, status: 403, error: READONLY_DATA_POOL_REASON };
+  }
   if (denyCrossAdminPath(resolved, admin) || denyCrossAdminPath(requested, admin)) {
     return { ok: false, status: 403, error: "Access denied" };
   }

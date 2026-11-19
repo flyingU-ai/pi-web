@@ -21,7 +21,7 @@ import {
 } from "@/lib/file-types";
 import { resolveDirentIsDirectory } from "@/lib/file-dirent";
 import { isHiddenOutsideGit, readFileTreeListing } from "@/lib/file-tree-visibility";
-import { isPoolHeavyDir } from "@/lib/web-bash-guard";
+import { isDatePoolRoot, isPoolHeavyDir } from "@/lib/web-bash-guard";
 import { isFilePathReferencedBySession } from "@/lib/session-file-references";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import {
@@ -41,7 +41,7 @@ import {
   VIRTUAL_CODE_HOME,
 } from "@/lib/dual-roots";
 import { annotateDataZoneBands } from "@/lib/data-zone-catalog";
-import { isDatePoolRoot } from "@/lib/web-bash-guard";
+import { isReadonlyDataPoolPath, isPrimaryDataPoolPath, READONLY_DATA_POOL_REASON } from "@/lib/data-pools";
 import { isDataTreeCodeZoneName } from "@/lib/admin-workspaces";
 import { adminFromRequest, resolveCurrentAdminAsync } from "@/lib/web-admin-scope";
 import { filePathFromApiSegments, samePath } from "@/lib/paths";
@@ -130,6 +130,11 @@ async function getUploadDirectory(
     return { response: NextResponse.json({ error: "Access denied" }, { status: 403 }) };
   }
 
+  if (isReadonlyDataPoolPath(directory) || isReadonlyDataPoolPath(realDirectory)) {
+    return {
+      response: NextResponse.json({ error: READONLY_DATA_POOL_REASON }, { status: 403 }),
+    };
+  }
   if (!isInsideCodeRoot(directory, admin, true) && !isInsideCodeRoot(realDirectory, admin, true)) {
     return {
       response: NextResponse.json(
@@ -584,7 +589,12 @@ export async function GET(
       }
       const chunk = readTextPreviewChunk(filePath, stat.size, offset);
       const language = getLanguage(filePath);
-      return NextResponse.json({ ...chunk, language, size: stat.size });
+      return NextResponse.json({
+        ...chunk,
+        language,
+        size: stat.size,
+        writable: !isReadonlyDataPoolPath(filePath),
+      });
     }
 
     if (type === "download") {
@@ -768,20 +778,26 @@ export async function GET(
 
     let codeMount: { ok: boolean; reason?: string } | undefined;
     if (isDatePoolRoot(requestedPath)) {
-      if (!admin) {
-        codeMount = { ok: false, reason: "admin_required" };
-      } else if (!canMountVirtualCode(requestedPath, admin)) {
-        codeMount = { ok: false, reason: "blocked_by_real_code_dir" };
-      } else {
-        codeMount = { ok: true };
-        if (!entries.some((e) => e.name === VIRTUAL_CODE_DIR)) {
-          entries.unshift({ name: VIRTUAL_CODE_DIR, isDir: true, size: 0, modified: "" });
+      // The writable pool is the primary one. A strict path check once hid the
+      // whole code zone when the warehouse mount was reached through a symlink,
+      // so "not readonly" is also accepted here.
+      const primary = isPrimaryDataPoolPath(requestedPath) || !isReadonlyDataPoolPath(requestedPath);
+      if (primary) {
+        if (!admin) {
+          codeMount = { ok: false, reason: "admin_required" };
+        } else if (!canMountVirtualCode(requestedPath, admin)) {
+          codeMount = { ok: false, reason: "blocked_by_real_code_dir" };
+        } else {
+          codeMount = { ok: true };
+          if (!entries.some((e) => e.name === VIRTUAL_CODE_DIR)) {
+            entries.unshift({ name: VIRTUAL_CODE_DIR, isDir: true, size: 0, modified: "" });
+          }
         }
       }
-      const code = entries.filter((entry) => entry.name === VIRTUAL_CODE_DIR);
+      const code = primary ? entries.filter((entry) => entry.name === VIRTUAL_CODE_DIR) : [];
       const data = annotateDataZoneBands(
         requestedPath,
-        entries.filter((entry) => entry.name !== VIRTUAL_CODE_DIR),
+        entries.filter((entry) => !primary || entry.name !== VIRTUAL_CODE_DIR),
       );
       entries.splice(0, entries.length, ...code, ...data);
     }

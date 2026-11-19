@@ -1432,6 +1432,18 @@ pre, code {
   pointer-events: auto;
 }
 
+.file-source-edit textarea {
+  color: transparent;
+  caret-color: var(--text);
+  -webkit-text-fill-color: transparent;
+}
+
+.file-source-edit textarea::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
 .chat-scroll-to-bottom {
   display: inline-flex;
   align-items: center;

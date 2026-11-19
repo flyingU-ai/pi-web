@@ -1,5 +1,7 @@
 /** Fleet numbers and DatePool path classifiers. No bash/find deny hooks. */
 
+import { catalogDataPoolRoots, isCatalogDataPoolRoot } from "./data-pools";
+
 export const FLEET_SLOT_CTX = 131072;
 export const FLEET_MAX_TOKENS = 16384;
 
@@ -19,6 +21,7 @@ function poolRootFromEnv(): string {
 export function isDatePoolRoot(absPath: string): boolean {
   const p = String(absPath || "").replace(/\/+$/, "");
   if (!p) return false;
+  if (isCatalogDataPoolRoot(p)) return true;
   const envRoot = poolRootFromEnv();
   if (envRoot && p === envRoot) return true;
   if (/AgentSMarkDatePoolv2$/i.test(p)) return true;
@@ -29,6 +32,9 @@ export function isDatePoolRoot(absPath: string): boolean {
 
 export function isUnderPool(absPath: string): boolean {
   const p = String(absPath || "").replace(/\/+$/, "");
+  for (const root of catalogDataPoolRoots()) {
+    if (p === root || p.startsWith(`${root}/`)) return true;
+  }
   const root = poolRootFromEnv();
   if (root && (p === root || p.startsWith(`${root}/`))) return true;
   if (isDatePoolRoot(p)) return true;

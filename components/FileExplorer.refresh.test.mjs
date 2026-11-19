@@ -31,3 +31,15 @@ test("truncated folders expose a local filter instead of expanding the image sea
   assert.match(explorer, /truncatedHint/);
   assert.match(route, /isPoolHeavyDir\(filePath\) && dirents\.length > 80/);
 });
+
+test("the usage card is not mounted in the sidebar", () => {
+  assert.doesNotMatch(shell, /AdminUsageCard/);
+});
+
+test("DATA can switch an attached readonly pool without changing cwd", () => {
+  assert.match(explorer, /\/api\/data-pools/);
+  assert.match(explorer, /files\.dataPoolLive/);
+  assert.match(explorer, /files\.dataPoolReadonlyHint/);
+  assert.match(explorer, /showingAttachPool \? attachRoots : liveDataRoots/);
+  assert.doesNotMatch(explorer, /setCwd\(/);
+});
