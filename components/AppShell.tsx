@@ -104,7 +104,29 @@ function HitTargetIcon() {
 export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const adminName = searchParams.get("admin") || "";
+  const queryAdmin = searchParams.get("admin") || "";
+  const [adminName, setAdminName] = useState(queryAdmin);
+  // The iframe brings a ticket, not ?admin=, so read the signed session once.
+  // Storage scopes then stay per login without putting the name in the URL.
+  useEffect(() => {
+    if (queryAdmin) {
+      setAdminName(queryAdmin);
+      return;
+    }
+    let cancelled = false;
+    fetch("/api/web-admin", { credentials: "same-origin", cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { admin?: string } | null) => {
+        const name = String(data?.admin || "").trim();
+        if (!cancelled && name) setAdminName(name);
+      })
+      .catch(() => {
+        // Single-user mode without a login wall: keep the empty scope.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [queryAdmin]);
   const terminalStorageKey = terminalTabsStorageKey(adminName);
   const [initialNavigation, setInitialNavigation] = useState(() => getInitialNavigation(searchParams));
   // Keep the system-theme subscription mounted for the lifetime of the app.

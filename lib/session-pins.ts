@@ -73,3 +73,45 @@ export function orderByPins<T>(items: readonly T[], idOf: (item: T) => string, p
   pinned.sort((a, b) => (rank.get(idOf(a)) ?? 0) - (rank.get(idOf(b)) ?? 0));
   return [...pinned, ...rest];
 }
+
+function cleanIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
+/** The whole scope → ids map, for syncing to the shared per-admin store. */
+export function readPinsMap(storage: StorageLike | null): Record<string, string[]> {
+  if (!storage) return {};
+  try {
+    const out: Record<string, string[]> = {};
+    for (const [scope, ids] of Object.entries(readMap(storage))) {
+      const clean = cleanIds(ids);
+      if (scope && clean.length) out[scope] = clean;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function writePinsMap(map: Record<string, string[]>, storage: StorageLike | null): void {
+  if (!storage) return;
+  try {
+    storage.setItem(STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // storage unavailable
+  }
+}
+
+/** Remote wins for the scopes it knows; scopes only this browser has are kept. */
+export function mergePinMaps(
+  local: Record<string, string[]>,
+  remote: Record<string, string[]>,
+): Record<string, string[]> {
+  const out: Record<string, string[]> = { ...local };
+  for (const [scope, ids] of Object.entries(remote)) {
+    const clean = cleanIds(ids);
+    if (scope && clean.length) out[scope] = clean;
+  }
+  return out;
+}

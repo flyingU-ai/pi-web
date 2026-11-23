@@ -19,7 +19,8 @@ import { getRelativeFilePath } from "@/lib/file-paths";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { SessionSearch } from "./SessionSearch";
 import { cycleSeat, notifyPairChange, PAIR_CHANGE_EVENT, readPair, seatOf, writePair, type SessionPair } from "@/lib/session-pair";
-import { orderByPins, pinSession, pinnedSessionIds, unpinSession } from "@/lib/session-pins";
+import { mergePinMaps, orderByPins, pinSession, pinnedSessionIds, readPinsMap, unpinSession, writePinsMap } from "@/lib/session-pins";
+import { readRemoteUiState, writeRemoteUiState } from "@/lib/ui-state-client";
 import { messageForApiFailure } from "@/lib/admin-session-error";
 
 // Fixed row height for the session list. SessionItem renders at exactly this
@@ -1181,6 +1182,42 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => pinnedSessionIds(storageScope, browserPinStorage()));
   const [sessionPair, setSessionPair] = useState<SessionPair | null>(null);
+  // Shared per-admin copy: read once on mount / scope change, write through on
+  // edit. Until that read lands the local copy is pushed, so both stay equal.
+  const remoteStateReadyRef = useRef(false);
+  const remotePushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    remoteStateReadyRef.current = false;
+    void readRemoteUiState().then((remote) => {
+      if (cancelled || !remote) return;
+      const storage = browserPinStorage();
+      const merged = mergePinMaps(readPinsMap(storage), remote.pins);
+      writePinsMap(merged, storage);
+      setPinnedIds(pinnedSessionIds(storageScope, storage));
+      if (remote.unread.length) {
+        setUnreadSessionIds((prev) => new Set([...prev, ...remote.unread]));
+      }
+      remoteStateReadyRef.current = true;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [storageScope]);
+  useEffect(() => {
+    if (!remoteStateReadyRef.current) return;
+    if (remotePushTimerRef.current) clearTimeout(remotePushTimerRef.current);
+    remotePushTimerRef.current = setTimeout(() => {
+      remotePushTimerRef.current = null;
+      void writeRemoteUiState({
+        pins: readPinsMap(browserPinStorage()),
+        unread: [...unreadSessionIds],
+      });
+    }, 1200);
+    return () => {
+      if (remotePushTimerRef.current) clearTimeout(remotePushTimerRef.current);
+    };
+  }, [pinnedIds, unreadSessionIds]);
   useEffect(() => {
     setPinnedIds(pinnedSessionIds(storageScope, browserPinStorage()));
     setSessionPair(readPair(storageScope, browserPinStorage()));
