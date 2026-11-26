@@ -82,3 +82,23 @@ export function uploadDirFromSelection(
   }
   return home || root;
 }
+
+/** Explorer upload line: this lab keeps files on the host, not a shared extra mount. */
+export function formatUploadTargetLabel(
+  uploadDir: string,
+  codeHome?: string | null,
+  codeRoot?: string | null,
+): string {
+  const dir = normalizeFilePathSlashes(uploadDir).replace(/\/+$/, "");
+  const home = codeHome ? normalizeFilePathSlashes(codeHome).replace(/\/+$/, "") : "";
+  const zone = codeRoot ? normalizeFilePathSlashes(codeRoot).replace(/\/+$/, "") : "";
+  if (home && (dir === home || dir.startsWith(`${home}/`))) {
+    const rest = dir === home ? "" : dir.slice(home.length + 1);
+    return rest ? `本机 home/${rest}` : "本机 home";
+  }
+  if (zone && (dir === zone || dir.startsWith(`${zone}/`))) {
+    const rest = dir === zone ? "" : dir.slice(zone.length + 1);
+    return rest ? `本机 ${rest}` : "本机 home";
+  }
+  return "本机 home";
+}

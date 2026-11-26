@@ -5,6 +5,7 @@ import { getFileIcon, FolderIcon } from "./FileIcons";
 import { DismissButton } from "./DismissButton";
 import {
   encodeFilePathForApi,
+  formatUploadTargetLabel,
   getFileDirectory,
   getFileName,
   getRelativeFilePath,
@@ -1036,6 +1037,10 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     () => uploadDirFromSelection(cwd, selectedDir, codeHomePath, codeRootPath),
     [cwd, selectedDir, codeHomePath, codeRootPath],
   );
+  const uploadTargetLabel = useMemo(
+    () => formatUploadTargetLabel(uploadDir, codeHomePath, codeRootPath),
+    [uploadDir, codeHomePath, codeRootPath],
+  );
   const codeParent = useMemo(() => {
     if (!codeRootPath) return "";
     if (selectedDir === codeRootPath) return codeHomePath;
@@ -1817,7 +1822,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
           )}
           {!loading && !error && (
             <div style={{ padding: "4px 10px 2px", fontSize: 10, color: "#2563eb" }}>
-              {t("files.uploadTarget", { path: getRelativeFilePath(uploadDir, cwd) || "." })}
+              {t("files.uploadTarget", { path: uploadTargetLabel })}
             </div>
           )}
           {mutateError && (

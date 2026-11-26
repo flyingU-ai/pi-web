@@ -405,7 +405,7 @@ export const enLocale: LocalePlugin = {
     "files.explorer": "Explorer",
     "files.gitIgnored": "Ignored by git · {path}",
     "files.codeZone": "code",
-    "files.codeHomeHint": "Upload or +d in home/. A repo beside it belongs only to this login.",
+    "files.codeHomeHint": "Upload or +d in this host's home (session-private). Do not share extra mounts.",
     "files.codeBlockedByRealDir": "A real DatePool/code directory is blocking the virtual code/ mount. Rename that folder.",
     "files.dataZone": "data",
     "files.dataZoneHint": "Data · @ only · ingest via _incoming",

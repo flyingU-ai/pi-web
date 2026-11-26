@@ -405,7 +405,7 @@ export const zhCNLocale: LocalePlugin = {
     "files.explorer": "文件浏览器",
     "files.gitIgnored": "已被 git 忽略 · {path}",
     "files.codeZone": "code",
-    "files.codeHomeHint": "上传或 +d 到 home/。旁边的仓库只属于当前登录名。",
+    "files.codeHomeHint": "上传或 +d 到本机 home（session-private）。不要共享 extra mount。",
     "files.codeBlockedByRealDir": "DatePool 里已有真目录 code/，虚拟 code/ 被挡住。请改名该目录。",
     "files.dataZone": "data",
     "files.dataZoneHint": "数据区 · 只 @ · 入库走 _incoming",
