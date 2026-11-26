@@ -35,6 +35,7 @@ import { getDraft, setDraft } from "@/lib/draft-store";
 import { latestAssistantUsage } from "@/lib/session-stats";
 import {
   captureScrollDistance,
+  getNextVisibleCount,
   getPromptAnchorSpacerHeight,
   getVisibleRenderWindow,
   isScrollAtTail,
@@ -294,6 +295,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     sessionIdRef, scrollContainerRef,
     lastUserMsgRef, promptAnchorActive,
     handleSend, handleAbort, handleFork, handleEditContent, cancelEdit, handleModelChange,
+    ensureNewSession,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,
@@ -306,6 +308,10 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     deferInitialScroll: Boolean(pendingScrollRestore),
   });
   const sessionBusy = agentRunning || bashRunning;
+  useEffect(() => {
+    if (!isNew || !newSessionCwd) return;
+    void ensureNewSession();
+  }, [isNew, newSessionCwd, ensureNewSession]);
   const pairSeat = seatOf(sessionPair, session?.id || "");
   const userTurns = useMemo(() => listUserTurns(messages, entryIds), [messages, entryIds]);
   const pairStartIndex = session?.id && sessionPair?.rangeStart?.[session.id]
@@ -613,6 +619,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   // Only render the last N messages initially. When the user scrolls to the
   // top, load another page while keeping the scroll position stable.
   const [visibleCount, setVisibleCount] = useState(VISIBLE_PAGE_SIZE);
+  const visibleCountRef = useRef(visibleCount);
+  visibleCountRef.current = visibleCount;
   const sentinelRef = useRef<HTMLDivElement>(null);
   const messageContentRef = useRef<HTMLDivElement | null>(null);
   const prevScrollDistanceRef = useRef<number | null>(null);
@@ -671,7 +679,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     const locate = async () => {
       const initialHistory = searchHistoryRef.current;
       if (initialHistory.entryIds.includes(position.anchorEntryId)) {
-        setVisibleCount((current) => Math.max(current, initialHistory.entryIds.length * 2));
+        setVisibleCount((current) => Math.max(current, initialHistory.entryIds.length));
         setRestoreAnchorReady(true);
         return;
       }
@@ -688,7 +696,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
             setPendingScrollRestore(null);
             return;
           }
-          setVisibleCount((current) => current + Math.max(VISIBLE_PAGE_SIZE, context.messages.length * 2));
+          setVisibleCount((current) => getNextVisibleCount(current, Math.max(VISIBLE_PAGE_SIZE, context.messages.length)));
           if (context.entryIds.includes(position.anchorEntryId)) {
             setRestoreAnchorReady(true);
             return;
@@ -750,7 +758,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       if (controller.signal.aborted) return;
       if (found) {
         prevScrollDistanceRef.current = null;
-        setVisibleCount((current) => Math.max(current, (searchHistoryRef.current.entryIds.length + 200) * 2));
+        setVisibleCount((current) => Math.max(current, searchHistoryRef.current.entryIds.length));
         setPendingSearchScroll(searchTarget);
       } else {
         onSearchTargetHandled?.(searchTarget);
@@ -784,10 +792,13 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     const observer = new IntersectionObserver(
       (entries) => {
         if (!entries[0]?.isIntersecting) return;
-        // No older history loaded yet: fetch the previous page from the server
-        // and prepend it (loadContext handles prepend + scroll anchoring).
-        // Skip while a page is already loading or nothing older exists.
         if (loadingOlderRef.current) return;
+        const loadedCount = searchHistoryRef.current.entryIds.length;
+        if (visibleCountRef.current < loadedCount) {
+          prevScrollDistanceRef.current = captureScrollDistance(container.scrollHeight, container.scrollTop);
+          setVisibleCount((current) => getNextVisibleCount(current));
+          return;
+        }
         if (!hasEarlierMessages) return;
         const oldestId = historyCursor;
         if (!oldestId) return;
@@ -795,7 +806,11 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
         if (!sid) return;
         loadingOlderRef.current = true;
         prevScrollDistanceRef.current = captureScrollDistance(container.scrollHeight, container.scrollTop);
-        void loadContext(sid, activeLeafId, oldestId).finally(() => {
+        void loadContext(sid, activeLeafId, oldestId).then((context) => {
+          if (context?.messages.length) {
+            setVisibleCount((current) => getNextVisibleCount(current, Math.max(VISIBLE_PAGE_SIZE, context.messages.length)));
+          }
+        }).finally(() => {
           loadingOlderRef.current = false;
         });
       },
@@ -804,12 +819,6 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [historyCursor, hasEarlierMessages, session, activeLeafId, loadContext, sessionIdRef, scrollContainerRef]);
-
-  // Keep the rendered window at least as large as what's loaded, so prepended
-  // (older) pages stay visible instead of being sliced off the top.
-  useEffect(() => {
-    setVisibleCount((current) => Math.max(current, messages.length));
-  }, [messages.length]);
 
   // After visibleCount increases (more messages prepended), restore the
   // scroll position so the viewport doesn't jump.
@@ -1106,6 +1115,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       onAudioUnlock={unlockAudio}
       draftKey={session?.id ?? newSessionDraftKey ?? undefined}
       cwd={session?.cwd ?? newSessionCwd}
+      onComposerReady={isNew && newSessionCwd ? () => { void ensureNewSession(); } : undefined}
     />
   );
 

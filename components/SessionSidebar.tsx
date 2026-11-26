@@ -614,7 +614,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         }, SESSION_DETAILS_HYDRATION_DELAY_MS);
       });
     } else {
-      void loadSessions(false, true);
+      void loadSessions(false, false, true);
     }
 
     return () => {
@@ -1990,11 +1990,16 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       setPinnedIds(next);
                     }}
                     onClick={() => handleSelectSessionFromList(family.root)}
-                    onRenamed={loadSessions}
+                    onRenamed={() => { void loadSessions(false, false, true); }}
                     onDeleted={(id) => {
+                      setAllSessions((current) => current.filter((row) => (
+                        row.id !== id
+                        && !(row.relation?.kind === "subagent" && row.relation.parentSessionId === id)
+                      )));
                       onSessionDeleted?.(id);
-                      loadSessions();
                     }}
+                    onDeleteFailed={() => { void loadSessions(false, false, true); }}
+                    onDeleteSettled={() => { void loadSessions(false, false, true); }}
                   />
                 </div>
               );
@@ -2318,6 +2323,8 @@ function SessionItem({
   onClick,
   onRenamed,
   onDeleted,
+  onDeleteFailed,
+  onDeleteSettled,
   depth = 0,
   hasChildren = false,
   collapsed = false,
@@ -2334,6 +2341,8 @@ function SessionItem({
   onClick: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
+  onDeleteFailed?: (id: string) => void;
+  onDeleteSettled?: (id: string) => void;
   depth?: number;
   hasChildren?: boolean;
   collapsed?: boolean;
@@ -2389,17 +2398,25 @@ function SessionItem({
     }
   }, [renameValue, session.id, session.name, onRenamed, title]);
 
-  const performDelete = useCallback(async () => {
+  const performDelete = useCallback(() => {
     if (session.transient) return;
     setConfirmDelete(false);
     setDeleting(true);
-    try {
-      await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
-      onDeleted?.(session.id);
-    } catch {
-      setDeleting(false);
-    }
-  }, [session.id, session.transient, onDeleted]);
+    onDeleted?.(session.id);
+    void fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" })
+      .then((res) => {
+        if (!res.ok) {
+          setDeleting(false);
+          onDeleteFailed?.(session.id);
+          return;
+        }
+        onDeleteSettled?.(session.id);
+      })
+      .catch(() => {
+        setDeleting(false);
+        onDeleteFailed?.(session.id);
+      });
+  }, [session.id, session.transient, onDeleted, onDeleteFailed, onDeleteSettled]);
 
   const handleDeleteClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();

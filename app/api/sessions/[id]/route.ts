@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { existsSync, readdirSync, statSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 import {
   attachSessionProjectInfo,
@@ -13,6 +13,7 @@ import {
   invalidateSessionManagerCache,
   buildSessionContext,
   readSessionHeader,
+  rewriteJsonlFirstLine,
 } from "@/lib/session-reader";
 import { sessionPathKey } from "@/lib/session-path";
 import { abortSubagent, getRpcSession, getRpcSessionInfos } from "@/lib/rpc-manager";
@@ -22,7 +23,7 @@ import { computeSessionStats } from "@/lib/session-stats";
 import { startServerPerf } from "@/lib/perf";
 import { computeSessionRevision } from "@/lib/session-revision";
 import type { SessionEntry } from "@/lib/types";
-import { readSubagentRun, readSubagentSessionResources, SUBAGENT_META_TYPE } from "@/lib/subagents";
+import { readSubagentRun, readSubagentSessionResources } from "@/lib/subagents";
 import { readSessionToolSelection } from "@/lib/session-tool-selection";
 import { jsonResponse } from "@/lib/json-response";
 import { withWebAdmin } from "@/lib/web-admin-scope";
@@ -250,11 +251,14 @@ async function deleteSession(
 
     const targetPathKey = sessionPathKey(filePath);
     const dir = dirname(filePath);
+    const perf = startServerPerf("DELETE /api/sessions/[id]");
     // Deleting a session also deletes every persisted or live subagent below it.
+    // allowStale: never rebuild/parse the whole catalogue on delete.
     const sessions = mergeSessionLists(
-      await listAllSessions({ force: true }),
+      await listAllSessions({ allowStale: true }),
       getRpcSessionInfos({ includeTransient: true }),
     );
+    perf?.span("catalogue");
     const childrenByParent = new Map<string, string[]>();
     for (const session of sessions) {
       if (session.relation?.kind !== "subagent") continue;
@@ -263,27 +267,24 @@ async function deleteSession(
       childrenByParent.set(session.relation.parentSessionId, children);
     }
     const sessionPaths = new Map(sessions.map((session) => [session.id, session.path]));
-    // Include local files even when the global catalogue is stale or incomplete.
+    // Header-only sibling scan. Never readFileSync a 46MB jsonl here.
     try {
       for (const file of readdirSync(dir).filter((name) => name.endsWith(".jsonl"))) {
         const childPath = join(dir, file);
         if (sessionPathKey(childPath) === targetPathKey) continue;
         try {
-          const lines = readFileSync(childPath, "utf8").split("\n");
-          const header = JSON.parse(lines[0]) as { type?: string; id?: string };
-          if (header.type !== "session" || typeof header.id !== "string") continue;
-          const entries = lines.slice(1).flatMap((line) => {
-            try { return [JSON.parse(line) as SessionEntry]; } catch { return []; }
-          });
-          const subagent = readSubagentRun(entries, header.id, childPath);
-          if (!subagent) continue;
-          const children = childrenByParent.get(subagent.parentSessionId) ?? [];
-          children.push(header.id);
-          childrenByParent.set(subagent.parentSessionId, children);
+          const header = readSessionHeader(childPath);
+          if (!header?.id || !header.parentSession) continue;
+          if (sessionPathKey(header.parentSession) !== targetPathKey) continue;
+          const parentId = id;
+          const children = childrenByParent.get(parentId) ?? [];
+          if (!children.includes(header.id)) children.push(header.id);
+          childrenByParent.set(parentId, children);
           sessionPaths.set(header.id, childPath);
         } catch { /* skip malformed or concurrently removed sessions */ }
       }
     } catch { /* skip if dir unreadable */ }
+    perf?.span("headers");
     const deletedSessionIds = new Set<string>([id]);
     const pending = [id];
     while (pending.length > 0) {
@@ -310,8 +311,7 @@ async function deleteSession(
     }
     const deletedPathKeys = new Set([...deletedPaths.values()].map((path) => sessionPathKey(path)));
 
-    // Re-attach all direct children to this session's parent (cascade re-parent)
-    // Scan sibling files in the same directory
+    // Re-attach remaining forks: rewrite the header line only.
     try {
       const files = readdirSync(dir).filter(
         (file) => file.endsWith(".jsonl") && sessionPathKey(join(dir, file)) !== targetPathKey,
@@ -320,46 +320,22 @@ async function deleteSession(
         const childPath = join(dir, file);
         if (deletedPathKeys.has(sessionPathKey(childPath))) continue;
         try {
-          const content = readFileSync(childPath, "utf8");
-          const lines = content.split("\n");
-          const header = JSON.parse(lines[0]) as { type?: string; parentSession?: string };
+          const header = readSessionHeader(childPath) as (ReturnType<typeof readSessionHeader> & {
+            parentSession?: string;
+          }) | null;
           if (
-            header.type === "session" &&
-            header.parentSession &&
-            sessionPathKey(header.parentSession) === targetPathKey
+            header
+            && header.parentSession
+            && sessionPathKey(header.parentSession) === targetPathKey
           ) {
-            // Rewrite header with new parentSession
             header.parentSession = parentSessionPath;
-            lines[0] = JSON.stringify(header);
-            if (parentSessionPath && parentSessionId) {
-              for (let index = 1; index < lines.length; index += 1) {
-                let entry: { type?: string; customType?: string; data?: unknown };
-                try {
-                  entry = JSON.parse(lines[index]);
-                } catch {
-                  continue;
-                }
-                if (
-                  entry.type !== "custom"
-                  || entry.customType !== SUBAGENT_META_TYPE
-                  || typeof entry.data !== "object"
-                  || entry.data === null
-                  || Array.isArray(entry.data)
-                ) continue;
-                entry.data = {
-                  ...entry.data,
-                  parentSessionId,
-                  parentSessionPath,
-                };
-                lines[index] = JSON.stringify(entry);
-                break;
-              }
-            }
-            writeFileSync(childPath, lines.join("\n"));
+            rewriteJsonlFirstLine(childPath, JSON.stringify(header));
           }
         } catch { /* skip malformed */ }
       }
     } catch { /* skip if dir unreadable */ }
+    void parentSessionId;
+    perf?.span("reparent");
 
     for (const deletedId of [...deletedSessionIds].reverse()) {
       if (deletedId === id) continue;
@@ -378,7 +354,9 @@ async function deleteSession(
       invalidateSessionManagerCache(deletedPath);
     }
     invalidateSessionListCache();
-    return NextResponse.json({ ok: true });
+    perf?.span("unlink");
+    const body = NextResponse.json({ ok: true });
+    return perf?.attach(body) ?? body;
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

@@ -95,6 +95,8 @@ interface Props {
   draftKey?: string;
   /** Session working directory — enables the @ file autocomplete menu */
   cwd?: string | null;
+  /** New-session warmup: focus the composer without waiting for the first send. */
+  onComposerReady?: () => void;
 }
 
 export interface ChatInputHandle {
@@ -607,6 +609,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   draftKey,
   cwd,
   compact = false,
+  onComposerReady,
 }: Props, ref) {
   const { t } = useI18n();
   const { fontSize } = useChatAppearance();
@@ -2234,6 +2237,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               updateAtQuery(el.value, el.selectionStart);
             }}
             onKeyDown={handleKeyDown}
+            onFocus={() => { onComposerReady?.(); }}
             onCompositionStart={() => {
               isComposingRef.current = true;
             }}

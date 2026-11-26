@@ -28,7 +28,7 @@ function warehouseFromEnv(env: NodeJS.ProcessEnv): string {
   return warehouseRoot();
 }
 
-/** SSOT parent: `$池/.agent/code`. */
+/** SSOT parent: host-local `PI_WEB_CODE_ZONES_ROOT`, else `$池/.agent/code`. */
 export function codeZonesRoot(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = String(env.PI_WEB_CODE_ZONES_ROOT || env.PI_WEB_CODE_HOMES_ROOT || "").trim();
   if (explicit) return resolve(explicit);

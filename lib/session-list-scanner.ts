@@ -32,6 +32,8 @@ interface Fingerprint {
 }
 
 const SUMMARY_HEADER_MAX_BYTES = 64 * 1024;
+/** Skip full transcript parse for giant jsonl; header/stat is enough for the list. */
+export const OVERSIZED_SESSION_BYTES = 20 * 1024 * 1024;
 
 interface IndexEntry {
 	fp: Fingerprint;
@@ -443,12 +445,15 @@ export async function listSessionsIncremental(
 			results[resultIndex] = cached.info;
 			continue;
 		}
-		if (deferDetails) {
+		if (deferDetails || fp.size >= OVERSIZED_SESSION_BYTES) {
 			// Header and stat only: a later normal listing fills in the transcript
 			// details, so a first paint does not wait on parsing every file.
+			// Oversized files stay on the header path even for a "full" listing.
 			const summary = deferredSessionInfo(filePath, fp);
-			if (summary) results[resultIndex] = summary;
-			else index.delete(filePath);
+			if (summary) {
+				results[resultIndex] = summary;
+				if (fp.size >= OVERSIZED_SESSION_BYTES) index.set(filePath, { fp, info: summary });
+			} else index.delete(filePath);
 			continue;
 		}
 		changed.push({ filePath, fp, resultIndex });

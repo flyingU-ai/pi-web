@@ -557,6 +557,7 @@ export async function GET(
     }
 
     if (type === "read") {
+      const readStartedAt = performance.now();
       if (!stat?.isFile()) {
         return NextResponse.json({ error: "Not a file" }, { status: 400 });
       }
@@ -589,6 +590,15 @@ export async function GET(
       }
       const chunk = readTextPreviewChunk(filePath, stat.size, offset);
       const language = getLanguage(filePath);
+      const readMs = performance.now() - readStartedAt;
+      if (readMs >= 2000) {
+        console.warn(JSON.stringify({
+          slowRead: true,
+          type: "read",
+          ms: Math.round(readMs),
+          bytes: stat.size,
+        }));
+      }
       return NextResponse.json({
         ...chunk,
         language,

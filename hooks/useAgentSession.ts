@@ -1764,6 +1764,49 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     let sentSessionId: string | null = null;
     let promptRequestStarted = false;
 
+    const rollbackPrompt = (e: unknown) => {
+      console.error("Failed to send message:", e);
+      const definitivelyRejected = !promptRequestStarted || isPromptRejectedError(e);
+      if (!definitivelyRejected && sentSessionId) {
+        void waitForPromptSettlement(sentSessionId, promptRunId);
+        return true;
+      }
+      rpcPromptPendingRef.current = false;
+      setMessages((prev) => {
+        const optimisticIndex = prev.lastIndexOf(userMsg);
+        return optimisticIndex === -1
+          ? prev
+          : [...prev.slice(0, optimisticIndex), ...prev.slice(optimisticIndex + 1)];
+      });
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      restoreSubmission(message, images, composerDraftKey);
+      optimisticUserMessageKeyRef.current = null;
+      if (sentSessionId) {
+        void reconcileAgentState(sentSessionId);
+        return false;
+      }
+      agentRunningRef.current = false;
+      closeEvents();
+      setAgentRunning(false);
+      setAgentPhase(null);
+      dispatch({ type: "end" });
+      return false;
+    };
+
+    const dispatchPrompt = (sid: string) => {
+      sentSessionId = sid;
+      promptRequestStarted = true;
+      void sendAgentCommand(sid, {
+        type: "prompt",
+        message,
+        ...(piImages?.length ? { images: piImages } : {}),
+      }).then(() => {
+        if (isSlashCommandPrompt) void waitForPromptSettlement(sid, promptRunId);
+      }).catch((e) => {
+        rollbackPrompt(e);
+      });
+    };
+
     try {
       if (isNew && newSessionCwd) {
         const selectedModel = newSessionModel;
@@ -1779,62 +1822,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           }
         }
         await ensureEventsConnected(sid);
-        promptRequestStarted = true;
-        await sendAgentCommand(sid, {
-          type: "prompt",
-          message,
-          ...(piImages?.length ? { images: piImages } : {}),
-        });
         promoteNewSession(1, message);
+        dispatchPrompt(sid);
       } else if (session) {
-        sentSessionId = session.id;
         await ensureEventsConnected(session.id);
-        promptRequestStarted = true;
-        await sendAgentCommand(session.id, {
-          type: "prompt",
-          message,
-          ...(piImages?.length ? { images: piImages } : {}),
-        });
+        dispatchPrompt(session.id);
       } else {
         throw new Error("No active session for the prompt");
       }
-      if (isSlashCommandPrompt && sentSessionId) {
-        void waitForPromptSettlement(sentSessionId, promptRunId);
-      }
       return true;
     } catch (e) {
-      console.error("Failed to send message:", e);
-      const definitivelyRejected = !promptRequestStarted || isPromptRejectedError(e);
-      // A transport/proxy failure after dispatch is ambiguous: the server may
-      // have accepted the prompt before the response was lost. Keep SSE alive
-      // until server state confirms the run is idle.
-      if (!definitivelyRejected && sentSessionId) {
-        void waitForPromptSettlement(sentSessionId, promptRunId);
-        return true;
-      }
-      rpcPromptPendingRef.current = false;
-      setMessages((prev) => {
-        const optimisticIndex = prev.lastIndexOf(userMsg);
-        return optimisticIndex === -1
-          ? prev
-          : [...prev.slice(0, optimisticIndex), ...prev.slice(optimisticIndex + 1)];
-      });
-      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
-      restoreSubmission(message, images, composerDraftKey);
-      optimisticUserMessageKeyRef.current = null;
-      // Rejection only describes this submission. Another tab or an event we
-      // missed may still have a real run active for the same session, so keep
-      // its SSE connection until server state says the wrapper is idle.
-      if (sentSessionId) {
-        void reconcileAgentState(sentSessionId);
-        return false;
-      }
-      agentRunningRef.current = false;
-      closeEvents();
-      setAgentRunning(false);
-      setAgentPhase(null);
-      dispatch({ type: "end" });
-      return false;
+      return rollbackPrompt(e);
     }
   }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, composerDraftKey, reconcileAgentState, restoreSubmission, editEntryId, setEdit]);
 
@@ -2746,6 +2744,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
+    ensureNewSession,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,

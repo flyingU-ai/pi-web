@@ -2,7 +2,7 @@ import {
   SessionManager,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { closeSync, type Dirent, fstatSync, openSync, readSync, statSync } from "fs";
+import { closeSync, type Dirent, fstatSync, openSync, readSync, renameSync, statSync, writeSync } from "fs";
 import { readdir } from "fs/promises";
 import { isAbsolute, join, normalize as normalizePath, relative, resolve as resolvePath, sep } from "path";
 import type { AgentMessage, ImageContent, SessionEntry, SessionHeader, SessionInfo, SessionContext } from "./types";
@@ -644,6 +644,40 @@ export function readSessionHeader(filePath: string): SessionHeader | null {
   } catch {
     return null;
   }
+}
+
+/** Replace the first jsonl line without loading the rest of a large transcript. */
+export function rewriteJsonlFirstLine(filePath: string, firstLine: string): void {
+  const header = firstLine.endsWith("\n") ? firstLine : `${firstLine}\n`;
+  const probeFd = openSync(filePath, "r");
+  let skip = 0;
+  try {
+    const probe = Buffer.allocUnsafe(SESSION_HEADER_MAX_BYTES);
+    const n = readSync(probeFd, probe, 0, probe.length, 0);
+    const nl = probe.subarray(0, n).indexOf(0x0a);
+    if (nl < 0) throw new Error("jsonl header has no newline");
+    skip = nl + 1;
+  } finally {
+    closeSync(probeFd);
+  }
+  const tmp = `${filePath}.header.tmp`;
+  const outFd = openSync(tmp, "w");
+  const inFd = openSync(filePath, "r");
+  try {
+    writeSync(outFd, header);
+    const buf = Buffer.allocUnsafe(64 * 1024);
+    let pos = skip;
+    for (;;) {
+      const n = readSync(inFd, buf, 0, buf.length, pos);
+      if (n <= 0) break;
+      writeSync(outFd, buf.subarray(0, n));
+      pos += n;
+    }
+  } finally {
+    closeSync(outFd);
+    closeSync(inFd);
+  }
+  renameSync(tmp, filePath);
 }
 
 export function getSessionEntries(filePath: string): SessionEntry[] {

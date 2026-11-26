@@ -46,6 +46,7 @@ let lastBackpressureLogAt = 0;
  * inside the window reaches the client as one event per tool call.
  */
 export const TOOL_UPDATE_COALESCE_MS = 150;
+export const MESSAGE_DELTA_COALESCE_MS = 50;
 
 /**
  * Whether a later event repairs this one if it is dropped. A `*_delta` only
@@ -136,6 +137,8 @@ export function createAgentEventStream(
       // Latest `tool_execution_update` per tool call id, waiting for the flush.
       const pendingToolUpdates = new Map<unknown, AgentEventLike>();
       let toolUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+      let pendingMessageDelta: AgentEventLike | null = null;
+      let messageDeltaTimer: ReturnType<typeof setTimeout> | null = null;
 
       // "error": hard-terminate the response (SSE client sees a broken
       // stream and reconnects). Used on process shutdown: a plain close() is
@@ -153,7 +156,9 @@ export function createAgentEventStream(
         activeStreamClosers.delete(cleanup);
         if (heartbeat !== null) clearInterval(heartbeat);
         if (toolUpdateTimer !== null) clearTimeout(toolUpdateTimer);
+        if (messageDeltaTimer !== null) clearTimeout(messageDeltaTimer);
         pendingToolUpdates.clear();
+        pendingMessageDelta = null;
         unsubscribe?.();
         unsubscribe = null;
         if (abortHandler) req.signal.removeEventListener("abort", abortHandler);
@@ -205,11 +210,26 @@ export function createAgentEventStream(
         pendingToolUpdates.clear();
         for (const update of updates) encode(update, { droppable: true });
       };
+      const flushMessageDelta = () => {
+        messageDeltaTimer = null;
+        const update = pendingMessageDelta;
+        pendingMessageDelta = null;
+        if (update) encode(update, { droppable: true });
+      };
       const sendClientEvent = (clientEvent: AgentEventLike) => {
         if (clientEvent.type === "tool_execution_update") {
           pendingToolUpdates.set(clientEvent.toolCallId, clientEvent);
           toolUpdateTimer ??= setTimeout(flushToolUpdates, TOOL_UPDATE_COALESCE_MS);
           return;
+        }
+        if (clientEvent.type === "message_update" && isDroppableEvent(clientEvent)) {
+          pendingMessageDelta = clientEvent;
+          messageDeltaTimer ??= setTimeout(flushMessageDelta, MESSAGE_DELTA_COALESCE_MS);
+          return;
+        }
+        if (messageDeltaTimer) {
+          clearTimeout(messageDeltaTimer);
+          flushMessageDelta();
         }
         // The end supersedes a partial result still waiting here, and the client
         // would treat one arriving after the end as a tool that is running again.
