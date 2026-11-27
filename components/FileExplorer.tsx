@@ -4,6 +4,7 @@ import { forwardRef, useState, useCallback, useEffect, useImperativeHandle, useM
 import { getFileIcon, FolderIcon } from "./FileIcons";
 import { DismissButton } from "./DismissButton";
 import {
+  datePoolSelectedSlug,
   encodeFilePathForApi,
   formatUploadTargetLabel,
   getFileDirectory,
@@ -1017,6 +1018,10 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     [dataPools, selectedPoolId],
   );
   const showingAttachPool = selectedPool?.role === "attach";
+  const selectedWarehouseSlug = useMemo(
+    () => datePoolSelectedSlug(selectedDir, selectedPool?.root || cwd),
+    [cwd, selectedDir, selectedPool?.root],
+  );
   const liveDataRoots = useMemo(() => {
     const nodes = codeNode ? roots.filter((node) => node !== codeNode) : roots;
     if (!nodes.some((node) => node.dataBand)) return nodes;
@@ -1779,6 +1784,11 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
                   <div style={{ padding: "2px 10px 4px", fontSize: 10, color: "#b45309" }}>
                     {showingAttachPool ? t("files.dataPoolReadonlyHint") : t("files.dataZoneHint")}
                   </div>
+                  {!showingAttachPool && selectedWarehouseSlug ? (
+                    <div style={{ padding: "0 10px 6px", fontSize: 10, color: "#b45309" }}>
+                      {t("files.dataWarehouseHint", { slug: selectedWarehouseSlug })}
+                    </div>
+                  ) : null}
                   {attachError && showingAttachPool ? (
                     <div style={{ padding: "2px 10px 6px", fontSize: 10, color: "#b91c1c" }}>{attachError}</div>
                   ) : null}

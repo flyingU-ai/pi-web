@@ -102,3 +102,13 @@ export function formatUploadTargetLabel(
   }
   return "本机 home";
 }
+
+/** First DatePool child of the selected path, or "" when the pool root is selected. */
+export function datePoolSelectedSlug(selectedDir: string, poolRoot?: string | null): string | null {
+  const sel = normalizeFilePathSlashes(selectedDir).replace(/\/+$/, "");
+  const root = poolRoot ? normalizeFilePathSlashes(poolRoot).replace(/\/+$/, "") : "";
+  if (!sel || !root) return null;
+  if (sel === root) return "";
+  if (!sel.startsWith(`${root}/`)) return null;
+  return sel.slice(root.length + 1).split("/").filter(Boolean)[0] || "";
+}
